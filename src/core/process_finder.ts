@@ -20,6 +20,7 @@ export interface process_info {
 
 const LOG_CAT = 'ProcessFinder';
 
+
 export class ProcessFinder {
 	private strategy: platform_strategy;
 	private process_name: string;
@@ -52,7 +53,7 @@ export class ProcessFinder {
 				const cmd = this.strategy.get_process_list_command(this.process_name);
 				logger.debug(LOG_CAT, `Executing process list command:\n${cmd}`);
 
-				const {stdout, stderr} = await exec_async(cmd, {timeout: 2000});
+				const {stdout, stderr} = await exec_async(cmd);
 
 				if (stderr) {
 					logger.warn(LOG_CAT, `Command stderr output: ${stderr}`);
@@ -173,7 +174,7 @@ export class ProcessFinder {
 					'Connect-Protocol-Version': '1',
 				},
 				rejectUnauthorized: false,
-				timeout: 500,
+				timeout: 5000,
 			};
 
 			logger.debug(LOG_CAT, `HTTP request to https://127.0.0.1:${port}${options.path}`);
