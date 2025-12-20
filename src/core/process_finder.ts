@@ -20,7 +20,6 @@ export interface process_info {
 
 const LOG_CAT = 'ProcessFinder';
 
-
 export class ProcessFinder {
 	private strategy: platform_strategy;
 	private process_name: string;
@@ -133,7 +132,7 @@ export class ProcessFinder {
 
 			logger.debug(LOG_CAT, `Port list stdout (${stdout.length} chars):\n${stdout.substring(0, 500)}${stdout.length > 500 ? '...(truncated)' : ''}`);
 
-			const ports = this.strategy.parse_listening_ports(stdout);
+			const ports = this.strategy.parse_listening_ports(stdout, pid);
 			logger.debug(LOG_CAT, `Parsed ports: [${ports.join(', ')}]`);
 
 			return ports;
@@ -181,7 +180,22 @@ export class ProcessFinder {
 
 			const req = https.request(options, res => {
 				logger.debug(LOG_CAT, `Response from port ${port}: status=${res.statusCode}`);
-				resolve(res.statusCode === 200);
+
+				let body = '';
+				res.on('data', chunk => (body += chunk));
+				res.on('end', () => {
+					if (res.statusCode === 200) {
+						try {
+							JSON.parse(body);
+							resolve(true);
+						} catch {
+							logger.debug(LOG_CAT, `Port ${port} responded with 200 but body is not valid JSON`);
+							resolve(false);
+						}
+					} else {
+						resolve(false);
+					}
+				});
 			});
 
 			req.on('error', (err: any) => {

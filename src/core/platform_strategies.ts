@@ -4,7 +4,7 @@ export interface platform_strategy {
 	get_process_list_command(process_name: string): string;
 	parse_process_info(stdout: string): {pid: number; extension_port: number; csrf_token: string} | null;
 	get_port_list_command(pid: number): string;
-	parse_listening_ports(stdout: string): number[];
+	parse_listening_ports(stdout: string, pid: number): number[];
 	get_error_messages(): {process_not_found: string; command_not_available: string; requirements: string[]};
 }
 
@@ -187,7 +187,7 @@ export class WindowsStrategy implements platform_strategy {
 		return `netstat -ano | findstr "${pid}"`;
 	}
 
-	parse_listening_ports(stdout: string): number[] {
+	parse_listening_ports(stdout: string, pid: number): number[] {
 		const ports: number[] = [];
 		if (this.use_powershell) {
 			try {
@@ -207,7 +207,7 @@ export class WindowsStrategy implements platform_strategy {
 			return ports.sort((a, b) => a - b);
 		}
 
-		const port_regex = /(?:127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)\s+(?:0\.0\.0\.0:0|\[::\]:0|\*:\*)/gi;
+		const port_regex = new RegExp(`(?:127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1?\\]):(\\d+)\\s+(?:0\\.0\\.0\\.0:0|\\[::\\]:0|\\*:\\*).*?\\s+${pid}$`, 'gim');
 		let match;
 
 		while ((match = port_regex.exec(stdout)) !== null) {
@@ -273,16 +273,16 @@ export class UnixStrategy implements platform_strategy {
 
 	get_port_list_command(pid: number): string {
 		if (this.platform === 'darwin') {
-			return `lsof -iTCP -sTCP:LISTEN -n -P -p ${pid}`;
+			return `lsof -nP -a -iTCP -sTCP:LISTEN -p ${pid}`;
 		}
-		return `ss -tlnp 2>/dev/null | grep "pid=${pid}" || lsof -iTCP -sTCP:LISTEN -n -P -p ${pid} 2>/dev/null`;
+		return `ss -tlnp 2>/dev/null | grep "pid=${pid}" || lsof -nP -a -iTCP -sTCP:LISTEN -p ${pid} 2>/dev/null`;
 	}
 
-	parse_listening_ports(stdout: string): number[] {
+	parse_listening_ports(stdout: string, pid: number): number[] {
 		const ports: number[] = [];
+		const lsof_regex = new RegExp(`^\\S+\\s+${pid}\\s+.*?(?:TCP|UDP)\\s+(?:\\*|[\\d.]+|\\[[\\da-f:]+\\]):(\\d+)\\s+\\(LISTEN\\)`, 'gim');
 
 		if (this.platform === 'darwin') {
-			const lsof_regex = /(?:TCP|UDP)\s+(?:\*|[\d.]+|\[[\da-f:]+\]):(\d+)\s+\(LISTEN\)/gi;
 			let match;
 			while ((match = lsof_regex.exec(stdout)) !== null) {
 				const port = parseInt(match[1], 10);
@@ -291,7 +291,7 @@ export class UnixStrategy implements platform_strategy {
 				}
 			}
 		} else {
-			const ss_regex = /LISTEN\s+\d+\s+\d+\s+(?:\*|[\d.]+|\[[\da-f:]*\]):(\d+)/gi;
+			const ss_regex = new RegExp(`LISTEN\\s+\\d+\\s+\\d+\\s+(?:\\*|[\\d.]+|\\[[\\da-f:]*\\]):(\\d+).*?users:.*?,pid=${pid},`, 'gi');
 			let match;
 			while ((match = ss_regex.exec(stdout)) !== null) {
 				const port = parseInt(match[1], 10);
@@ -301,7 +301,6 @@ export class UnixStrategy implements platform_strategy {
 			}
 
 			if (ports.length === 0) {
-				const lsof_regex = /(?:TCP|UDP)\s+(?:\*|[\d.]+|\[[\da-f:]+\]):(\d+)\s+\(LISTEN\)/gi;
 				while ((match = lsof_regex.exec(stdout)) !== null) {
 					const port = parseInt(match[1], 10);
 					if (!ports.includes(port)) {

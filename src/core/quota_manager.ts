@@ -84,16 +84,13 @@ export class QuotaManager {
 
 	async fetch_quota() {
 		try {
-			const data = await this.request<server_user_status_response>(
-				'/exa.language_server_pb.LanguageServerService/GetUserStatus',
-				{
-					metadata: {
-						ideName: 'antigravity',
-						extensionName: 'antigravity',
-						locale: 'en',
-					},
-				}
-			);
+			const data = await this.request<server_user_status_response>('/exa.language_server_pb.LanguageServerService/GetUserStatus', {
+				metadata: {
+					ideName: 'antigravity',
+					extensionName: 'antigravity',
+					locale: 'en',
+				},
+			});
 
 			const snapshot = this.parse_response(data);
 
@@ -144,7 +141,7 @@ export class QuotaManager {
 					is_exhausted: m.quotaInfo.remainingFraction === 0,
 					reset_time: reset_time,
 					time_until_reset: diff,
-					time_until_reset_formatted: this.format_time(diff),
+					time_until_reset_formatted: this.format_time(diff, reset_time),
 				};
 			});
 
@@ -155,11 +152,28 @@ export class QuotaManager {
 		};
 	}
 
-	private format_time(ms: number): string {
+	private format_time(ms: number, reset_time: Date): string {
 		if (ms <= 0) return 'Ready';
 		const mins = Math.ceil(ms / 60000);
-		if (mins < 60) return `${mins}m`;
-		const hours = Math.floor(mins / 60);
-		return `${hours}h ${mins % 60}m`;
+		let duration = '';
+		if (mins < 60) {
+			duration = `${mins}m`;
+		} else {
+			const hours = Math.floor(mins / 60);
+			duration = `${hours}h ${mins % 60}m`;
+		}
+
+		const date_str = reset_time.toLocaleDateString(undefined, {
+			day: '2-digit',
+			month: '2-digit',
+			year: 'numeric',
+		});
+		const time_str = reset_time.toLocaleTimeString(undefined, {
+			hour: '2-digit',
+			minute: '2-digit',
+			hour12: false,
+		});
+
+		return `${duration} (${date_str} ${time_str})`;
 	}
 }
