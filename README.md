@@ -108,7 +108,8 @@ npm run lint
 
 ## Disclaimer
 
-This extension was created by me and Gemini 3 Pro between some Rainbow Six Siege Games, therefore please do not expect the highest code quality in this repo (yet)
+This extension was created by me and Gemini 3 Pro between some Rainbow Six Siege Games, therefore please do not expect the highest code quality in this repo (yet).
+Some parts of the code (and especially the knowledge of how this process works) are based on the [Antigravity Quota Watcher](https://github.com/wusimpl/AntigravityQuotaWatcher) project. May check it out and leave a star at his repo if you find this useful.
 
 This project isn't endorsed by Google and doesn't reflect the views or opinions of Google or anyone officially involved in producing or managing Google/AntiGravity properties
 
