@@ -279,7 +279,7 @@ export class UnixStrategy implements platform_strategy {
 
 			// Extract port and token if available
 			const port_match = cmd.match(/--extension_server_port[=\s]+(\d+)/);
-			const token_match = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
+			const token_match = cmd.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
 
 			// Return ALL PIDs, even if token is missing (crucial for macOS truncation)
 			candidates.push({
@@ -308,7 +308,7 @@ export class UnixStrategy implements platform_strategy {
 
 		const command_line = full_args.trim();
 		const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
-		const token_match = command_line.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
+		const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
 
 		if (!token_match) {
 			return null;

@@ -54,7 +54,7 @@ export class ProcessFinder {
 		let null_requery_remaining = NULL_REQUERY_BUDGET;
 
 		// Get workspace paths for prioritization
-		const workspace_paths = this.get_workspace_paths();
+		const workspace_paths = await this.get_workspace_paths();
 		const target_folder = this.get_target_folder();
 
 		logger.debug(LOG_CAT, `Target folder: ${target_folder?.uri.fsPath ?? 'none'}`);
@@ -212,7 +212,7 @@ export class ProcessFinder {
 		return { candidates: resolved, null_requeried: null_used };
 	}
 
-	private get_workspace_paths(): { fsPath: string; realPath: string; workspace_id: string; realPath_id: string }[] {
+	private async get_workspace_paths(): Promise<{ fsPath: string; realPath: string; workspace_id: string; realPath_id: string }[]> {
 		const folders = vscode.workspace.workspaceFolders || [];
 		const result: { fsPath: string; realPath: string; workspace_id: string; realPath_id: string }[] = [];
 
@@ -225,7 +225,7 @@ export class ProcessFinder {
 			let realPath = fsPath;
 
 			try {
-				realPath = fs.realpathSync(fsPath);
+				realPath = await fs.promises.realpath(fsPath);
 			} catch {
 				// Fall back to original path
 			}
@@ -268,20 +268,21 @@ export class ProcessFinder {
 		target_folder: vscode.WorkspaceFolder | undefined,
 		workspace_paths: { fsPath: string; realPath: string; workspace_id: string; realPath_id: string }[]
 	): candidate_info[] {
-		// Get target folder paths (if any)
+		// Get target folder paths (if any) - reuse from workspace_paths to avoid redundant I/O
 		let target_paths: string[] = [];
 		let target_ids: string[] = [];
 
 		if (target_folder && target_folder.uri.scheme === 'file') {
-			const fsPath = target_folder.uri.fsPath;
-			let realPath = fsPath;
-			try {
-				realPath = fs.realpathSync(fsPath);
-			} catch {
-				// Fall back to original
+			const path_info = workspace_paths.find(p => p.fsPath === target_folder.uri.fsPath);
+			if (path_info) {
+				target_paths = [path_info.fsPath, path_info.realPath];
+				target_ids = [path_info.workspace_id, path_info.realPath_id];
+			} else {
+				// Fallback for safety if target_folder is not in workspace_paths (e.g. a loose file)
+				const fsPath = target_folder.uri.fsPath;
+				target_paths = [fsPath];
+				target_ids = [this.derive_workspace_id(fsPath)];
 			}
-			target_paths = [fsPath, realPath];
-			target_ids = [this.derive_workspace_id(fsPath), this.derive_workspace_id(realPath)];
 		}
 
 		// Compute all workspace paths and IDs
