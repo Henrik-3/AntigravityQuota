@@ -14,6 +14,9 @@ let process_finder: ProcessFinder;
 let quota_manager: QuotaManager;
 let status_bar: StatusBarManager;
 let is_initialized = false;
+let is_searching = false;
+let retry_timer: NodeJS.Timeout | undefined;
+let retry_resolve: (() => void) | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
 	logger.init(context);
@@ -63,7 +66,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('agq.reconnect', async () => {
 			logger.info('Extension', 'Reconnect triggered');
 			vscode.window.showInformationMessage('Reconnecting to Antigravity process...');
+			
+			// Cancel any pending retry and resolve the promise immediately
+			if (retry_timer) {
+				clearTimeout(retry_timer);
+				retry_timer = undefined;
+			}
+			if (retry_resolve) {
+				retry_resolve();
+				retry_resolve = undefined;
+			}
+			
 			is_initialized = false;
+			is_searching = false; // Allow fresh search
+			
 			quota_manager.stop_polling();
 			status_bar.show_loading();
 			await initialize_extension();
@@ -117,60 +133,91 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 async function initialize_extension() {
-	if (is_initialized) {
-		logger.debug('Extension', 'Already initialized, skipping');
+	if (is_initialized || is_searching) {
+		logger.debug('Extension', 'Already initialized or searching, skipping');
 		return;
 	}
 
+	is_searching = true;
 	logger.section('Extension', 'Initializing Extension');
-	const timer = logger.time_start('initialize_extension');
 
-	const config = config_manager.get_config();
-	status_bar.show_loading();
+	const MAX_RETRIES = 5;
+	const RETRY_DELAY = 5 * 60 * 1000; // 5 minutes
 
-	try {
-		logger.info('Extension', 'Detecting Antigravity process...');
-		const process_info = await process_finder.detect_process_info();
+	for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+		const timer = logger.time_start(`initialize_attempt_${attempt}`);
+		const config = config_manager.get_config();
+		status_bar.show_loading();
 
-		if (process_info) {
-			logger.info('Extension', 'Process found successfully', {
-				extension_port: process_info.extension_port,
-				connect_port: process_info.connect_port,
-				csrf_token: process_info.csrf_token.substring(0, 8) + '...',
-			});
+		try {
+			logger.info('Extension', `Detecting Antigravity process (Attempt ${attempt}/${MAX_RETRIES})...`);
+			const process_info = await process_finder.detect_process_info();
 
-			quota_manager.init(process_info.connect_port, process_info.csrf_token);
+			if (process_info) {
+				logger.info('Extension', 'Process found successfully', {
+					extension_port: process_info.extension_port,
+					connect_port: process_info.connect_port,
+					csrf_token: process_info.csrf_token.substring(0, 8) + '...',
+				});
 
-			if (config.enabled) {
-				logger.debug('Extension', `Starting polling with interval: ${config.polling_interval}ms`);
-				quota_manager.start_polling(config.polling_interval);
-			}
-			is_initialized = true;
-			logger.info('Extension', 'Initialization successful');
-		} else {
-			logger.error('Extension', 'Antigravity process not found');
-			logger.info('Extension', 'Troubleshooting tips:');
-			logger.info('Extension', '   1. Make sure Antigravity extension is installed and enabled');
-			logger.info('Extension', '   2. Check if the language_server process is running');
-			logger.info('Extension', '   3. Try reloading VS Code');
-			logger.info('Extension', '   4. Open "Output" panel and select "Antigravity Quota" for detailed logs');
+				quota_manager.init(process_info.connect_port, process_info.csrf_token);
 
-			status_bar.show_error('Antigravity process not found');
-			vscode.window.showErrorMessage('Could not find Antigravity process. Is it running? Use "AGQ: Show Debug Log" to see details.', 'Show Logs').then(action => {
-				if (action === 'Show Logs') {
-					logger.show();
+				if (config.enabled) {
+					logger.debug('Extension', `Starting polling with interval: ${config.polling_interval}ms`);
+					quota_manager.start_polling(config.polling_interval);
 				}
+				is_initialized = true;
+				is_searching = false;
+				logger.info('Extension', 'Initialization successful');
+				timer();
+				return;
+			} else {
+				logger.error('Extension', `Antigravity process not found (Attempt ${attempt}/${MAX_RETRIES})`);
+				
+				if (attempt < MAX_RETRIES) {
+					const next_attempt_mins = RETRY_DELAY / 60000;
+					logger.info('Extension', `Retrying in ${next_attempt_mins} minutes...`);
+					status_bar.show_error(`Process not found. Retrying in ${next_attempt_mins}m...`);
+					
+					await new Promise<void>(resolve => {
+						retry_resolve = resolve;
+						retry_timer = setTimeout(() => {
+							retry_resolve = undefined;
+							resolve();
+						}, RETRY_DELAY);
+					});
+					retry_timer = undefined;
+				} else {
+					logger.error('Extension', 'Max retries reached. process not found.');
+					status_bar.show_error('Antigravity process not found');
+					vscode.window.showErrorMessage('Could not find Antigravity process after several attempts. Is it running?', 'Retry', 'Show Logs').then(action => {
+						if (action === 'Retry') {
+							vscode.commands.executeCommand('agq.reconnect');
+						} else if (action === 'Show Logs') {
+							logger.show();
+						}
+					});
+				}
+			}
+		} catch (e: any) {
+			logger.error('Extension', 'Detection failed with exception:', {
+				message: e.message,
+				stack: e.stack,
+			});
+			status_bar.show_error('Detection failed');
+			if (attempt === MAX_RETRIES) break;
+			await new Promise<void>(resolve => {
+				retry_resolve = resolve;
+				retry_timer = setTimeout(() => {
+					retry_resolve = undefined;
+					resolve();
+				}, RETRY_DELAY);
 			});
 		}
-	} catch (e: any) {
-		logger.error('Extension', 'Detection failed with exception:', {
-			message: e.message,
-			stack: e.stack,
-		});
-		status_bar.show_error('Detection failed');
+		timer();
 	}
 
-	timer();
+	is_searching = false;
 }
 
 export function deactivate() {
