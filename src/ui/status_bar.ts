@@ -123,6 +123,12 @@ export class StatusBarManager {
 					const config = vscode.workspace.getConfiguration('agq');
 					this.update(this.last_snapshot, !!config.get('showPromptCredits'));
 				}
+			} else if (currentActiveItem && (currentActiveItem as any).action === 'reconnect') {
+				vscode.commands.executeCommand('agq.reconnect');
+				pick.hide();
+			} else if (currentActiveItem && (currentActiveItem as any).action === 'settings') {
+				vscode.commands.executeCommand('workbench.action.openSettings', 'agq');
+				pick.hide();
 			}
 		});
 
@@ -199,6 +205,15 @@ export class StatusBarManager {
 				description: `${bar} ${pc.remaining_percentage.toFixed(1)}%`,
 			});
 		}*/
+
+		// Add Refresh and Settings
+		items.push({label: 'Actions', kind: vscode.QuickPickItemKind.Separator});
+		
+		items.push({
+			label: '$(sync) Retry Connection',
+			description: 'Force search for Antigravity process',
+			action: 'reconnect'
+		} as any);
 
 		return items;
 	}
