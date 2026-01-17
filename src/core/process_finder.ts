@@ -32,7 +32,7 @@ export class ProcessFinder {
 			this.process_name = 'language_server_windows_x64.exe';
 		} else if (process.platform === 'darwin') {
 			this.strategy = new UnixStrategy('darwin');
-			this.process_name = `language_server_macos${process.arch === 'arm64' ? '_arm' : ''}`;
+			this.process_name = `language_server_macos_${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
 		} else {
 			this.strategy = new UnixStrategy('linux');
 			this.process_name = `language_server_linux${process.arch === 'arm64' ? '_arm' : '_x64'}`;
@@ -52,7 +52,7 @@ export class ProcessFinder {
 				const cmd = this.strategy.get_process_list_command(this.process_name);
 				logger.debug(LOG_CAT, `Executing process list command:\n${cmd}`);
 
-				const {stdout, stderr} = await exec_async(cmd);
+				const { stdout, stderr } = await exec_async(cmd);
 
 				if (stderr) {
 					logger.warn(LOG_CAT, `Command stderr output: ${stderr}`);
@@ -124,7 +124,7 @@ export class ProcessFinder {
 			const cmd = this.strategy.get_port_list_command(pid);
 			logger.debug(LOG_CAT, `Port list command:\n${cmd}`);
 
-			const {stdout, stderr} = await exec_async(cmd);
+			const { stdout, stderr } = await exec_async(cmd);
 
 			if (stderr) {
 				logger.warn(LOG_CAT, `Port list stderr: ${stderr}`);
@@ -209,7 +209,7 @@ export class ProcessFinder {
 				resolve(false);
 			});
 
-			req.write(JSON.stringify({wrapper_data: {}}));
+			req.write(JSON.stringify({ wrapper_data: {} }));
 			req.end();
 		});
 	}
