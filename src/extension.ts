@@ -130,7 +130,7 @@ async function initialize_extension() {
 
 	try {
 		logger.info('Extension', 'Detecting Antigravity process...');
-		const process_info = await process_finder.detect_process_info();
+		const process_info = await process_finder.detect_process_info(5);
 
 		if (process_info) {
 			logger.info('Extension', 'Process found successfully', {
