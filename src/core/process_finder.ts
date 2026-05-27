@@ -29,7 +29,7 @@ export class ProcessFinder {
 
 		if (process.platform === 'win32') {
 			this.strategy = new WindowsStrategy();
-			this.process_name = 'language_server_windows_x64.exe';
+			this.process_name = `language_server_windows_${process.arch === 'arm64' ? 'arm' : 'x64'}.exe`;
 		} else if (process.platform === 'darwin') {
 			this.strategy = new UnixStrategy('darwin');
 			this.process_name = `language_server_macos${process.arch === 'arm64' ? '_arm' : ''}`;
