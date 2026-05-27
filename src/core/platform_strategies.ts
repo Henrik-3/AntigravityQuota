@@ -1,11 +1,25 @@
-import {logger} from '../utils/logger';
+import { logger } from '../utils/logger';
+
+// New candidate_info interface for multi-candidate support
+export interface candidate_info {
+	pid: number;
+	extension_port: number; // May be 0 if unparsed
+	csrf_token: string;     // May be "" if unparsed
+	command_line: string;   // May be "" if null/truncated
+}
 
 export interface platform_strategy {
-	get_process_list_command(process_name: string): string;
-	parse_process_info(stdout: string): {pid: number; extension_port: number; csrf_token: string} | null;
+	// New: Returns tiered commands for discovery
+	get_process_list_commands(process_name: string): { name: string; command: string }[];
+	// Changed: Returns array of candidates, MUST include PID even if args are missing
+	parse_process_info(stdout: string): candidate_info[];
+	// New: For targeted PID re-query (macOS/Windows truncation)
+	get_full_command_line_command(pid: number): string | null;
+	parse_command_line(pid: number, full_args: string): candidate_info | null;
+	// Existing (unchanged)
 	get_port_list_command(pid: number): string;
 	parse_listening_ports(stdout: string, pid: number): number[];
-	get_error_messages(): {process_not_found: string; command_not_available: string; requirements: string[]};
+	get_error_messages(): { process_not_found: string; command_not_available: string; requirements: string[] };
 }
 
 export class WindowsStrategy implements platform_strategy {
@@ -40,14 +54,26 @@ export class WindowsStrategy implements platform_strategy {
 		return false;
 	}
 
-	get_process_list_command(process_name: string): string {
+	get_process_list_commands(process_name: string): { name: string; command: string }[] {
+		// Windows: Single tier (no user-based filtering needed like Unix)
 		if (this.use_powershell) {
-			return `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"name='${process_name}'\\" | Select-Object ProcessId,CommandLine | ConvertTo-Json"`;
+			return [
+				{
+					name: 'PowerShell',
+					command: `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"name='${process_name}'\\" | Select-Object ProcessId,CommandLine | ConvertTo-Json"`,
+				},
+			];
 		}
-		return `wmic process where "name='${process_name}'" get ProcessId,CommandLine /format:list`;
+		return [
+			{
+				name: 'WMIC',
+				command: `wmic process where "name='${process_name}'" get ProcessId,CommandLine /format:list`,
+			},
+		];
 	}
 
-	parse_process_info(stdout: string): {pid: number; extension_port: number; csrf_token: string} | null {
+	parse_process_info(stdout: string): candidate_info[] {
+		const candidates: candidate_info[] = [];
 		logger.debug('WindowsStrategy', `Parsing process info (using PowerShell: ${this.use_powershell})`);
 
 		if (this.use_powershell || stdout.trim().startsWith('{') || stdout.trim().startsWith('[')) {
@@ -56,128 +82,104 @@ export class WindowsStrategy implements platform_strategy {
 			try {
 				let data = JSON.parse(stdout.trim());
 
-				if (Array.isArray(data)) {
-					logger.debug('WindowsStrategy', `JSON is an array with ${data.length} element(s)`);
-
-					if (data.length === 0) {
-						logger.warn('WindowsStrategy', `Empty process array - no language_server processes found`);
-						return null;
-					}
-
-					const total_count = data.length;
-
-					for (let i = 0; i < data.length; i++) {
-						const item = data[i];
-						logger.debug('WindowsStrategy', `Process ${i + 1}/${total_count}: PID=${item.ProcessId}`);
-						logger.debug('WindowsStrategy', `  CommandLine: ${item.CommandLine ? item.CommandLine.substring(0, 200) + '...' : '(empty)'}`);
-					}
-
-					const antigravity_processes = data.filter((item: any) => item.CommandLine && this.is_antigravity_process(item.CommandLine));
-
-					logger.info('WindowsStrategy', `Found ${total_count} language_server process(es), ${antigravity_processes.length} belong to Antigravity`);
-
-					if (antigravity_processes.length === 0) {
-						logger.warn('WindowsStrategy', `No Antigravity process found among ${total_count} language_server process(es)`);
-						logger.debug('WindowsStrategy', `Hint: Looking for processes with '--app_data_dir antigravity' or '\\antigravity\\' in path`);
-						return null;
-					}
-
-					if (total_count > 1) {
-						logger.info(
-							'WindowsStrategy',
-							`Selected Antigravity process PID: ${antigravity_processes[0].ProcessId} (first match of ${antigravity_processes.length})`
-						);
-					}
-					data = antigravity_processes[0];
-				} else {
-					logger.debug('WindowsStrategy', `JSON is a single object (PID: ${data.ProcessId})`);
-					logger.debug('WindowsStrategy', `CommandLine: ${data.CommandLine ? data.CommandLine.substring(0, 200) + '...' : '(empty)'}`);
-
-					if (!data.CommandLine || !this.is_antigravity_process(data.CommandLine)) {
-						logger.warn('WindowsStrategy', `Single process found but not Antigravity, skipping`);
-						return null;
-					}
-					logger.info('WindowsStrategy', `Found 1 Antigravity process, PID: ${data.ProcessId}`);
+				if (!Array.isArray(data)) {
+					data = [data];
 				}
 
-				const command_line = data.CommandLine || '';
-				const pid = data.ProcessId;
+				logger.debug('WindowsStrategy', `JSON has ${data.length} element(s)`);
 
-				if (!pid) {
-					logger.error('WindowsStrategy', `No PID found in process data`);
-					return null;
+				for (const item of data) {
+					if (!item.ProcessId) {
+						continue;
+					}
+
+					const pid = item.ProcessId;
+					const command_line = item.CommandLine || '';
+
+					// Check if this is an Antigravity process (if command line is available)
+					if (command_line && !this.is_antigravity_process(command_line)) {
+						continue;
+					}
+
+					// Extract port and token if available
+					const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
+					const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
+
+					candidates.push({
+						pid,
+						extension_port: port_match ? parseInt(port_match[1], 10) : 0,
+						csrf_token: token_match ? token_match[1] : '',
+						command_line,
+					});
+
+					logger.debug('WindowsStrategy', `Added candidate: PID=${pid}, token=${token_match ? 'FOUND' : 'MISSING'}, cmdline=${command_line ? 'present' : 'empty'}`);
+				}
+			} catch (e: any) {
+				logger.error('WindowsStrategy', `JSON parse error: ${e.message}`);
+				logger.debug('WindowsStrategy', `Raw stdout (first 500 chars): ${stdout.substring(0, 500)}`);
+			}
+		} else {
+			// WMIC fallback parsing
+			const blocks = stdout.split(/\n\s*\n/).filter(block => block.trim().length > 0);
+			logger.debug('WindowsStrategy', `Fallback: Processing WMIC output with ${blocks.length} block(s)`);
+
+			for (const block of blocks) {
+				const pid_match = block.match(/ProcessId=(\d+)/);
+				const command_line_match = block.match(/CommandLine=(.+)/);
+
+				if (!pid_match) {
+					continue;
+				}
+
+				const pid = parseInt(pid_match[1], 10);
+				const command_line = command_line_match ? command_line_match[1].trim() : '';
+
+				if (command_line && !this.is_antigravity_process(command_line)) {
+					continue;
 				}
 
 				const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
 				const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
 
-				logger.debug(
-					'WindowsStrategy',
-					`Regex matches: extension_port=${port_match ? port_match[1] : 'NOT FOUND'}, csrf_token=${token_match ? 'FOUND' : 'NOT FOUND'}`
-				);
+				candidates.push({
+					pid,
+					extension_port: port_match ? parseInt(port_match[1], 10) : 0,
+					csrf_token: token_match ? token_match[1] : '',
+					command_line,
+				});
 
-				if (!token_match || !token_match[1]) {
-					logger.error('WindowsStrategy', `CSRF token not found in command line`);
-					logger.debug('WindowsStrategy', `Full command line: ${command_line}`);
-					return null;
-				}
-
-				const extension_port = port_match && port_match[1] ? parseInt(port_match[1], 10) : 0;
-				const csrf_token = token_match[1];
-
-				logger.debug('WindowsStrategy', `Extracted: PID=${pid}, extension_port=${extension_port}, csrf_token=${csrf_token.substring(0, 8)}...`);
-
-				return {pid, extension_port, csrf_token};
-			} catch (e: any) {
-				logger.error('WindowsStrategy', `JSON parse error: ${e.message}`);
-				logger.debug('WindowsStrategy', `Raw stdout (first 500 chars): ${stdout.substring(0, 500)}`);
+				logger.debug('WindowsStrategy', `WMIC: Added candidate PID=${pid}`);
 			}
 		}
-		const blocks = stdout.split(/\n\s*\n/).filter(block => block.trim().length > 0);
 
-		logger.debug('WindowsStrategy', `Fallback: Processing WMIC output with ${blocks.length} block(s)`);
+		logger.info('WindowsStrategy', `Found ${candidates.length} Antigravity candidate(s)`);
+		return candidates;
+	}
 
-		const candidates: Array<{pid: number; extension_port: number; csrf_token: string}> = [];
+	get_full_command_line_command(pid: number): string | null {
+		// PowerShell re-query for specific PID
+		return `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"ProcessId = ${pid}\\" | Select-Object -ExpandProperty CommandLine"`;
+	}
 
-		for (const block of blocks) {
-			const pid_match = block.match(/ProcessId=(\d+)/);
-			const command_line_match = block.match(/CommandLine=(.+)/);
-
-			if (!pid_match || !command_line_match) {
-				logger.debug('WindowsStrategy', `WMIC block skipped: missing PID or CommandLine`);
-				continue;
-			}
-
-			const command_line = command_line_match[1].trim();
-			logger.debug('WindowsStrategy', `WMIC: Checking PID ${pid_match[1]}`);
-
-			if (!this.is_antigravity_process(command_line)) {
-				continue;
-			}
-
-			const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
-			const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
-
-			if (!token_match || !token_match[1]) {
-				logger.debug('WindowsStrategy', `WMIC: PID ${pid_match[1]} has no CSRF token, skipping`);
-				continue;
-			}
-
-			const pid = parseInt(pid_match[1], 10);
-			const extension_port = port_match && port_match[1] ? parseInt(port_match[1], 10) : 0;
-			const csrf_token = token_match[1];
-
-			logger.debug('WindowsStrategy', `WMIC: Found candidate PID=${pid}, extension_port=${extension_port}`);
-			candidates.push({pid, extension_port, csrf_token});
-		}
-
-		if (candidates.length === 0) {
-			logger.warn('WindowsStrategy', `WMIC: No Antigravity process found`);
+	parse_command_line(pid: number, full_args: string): candidate_info | null {
+		if (!full_args || full_args.trim() === '') {
 			return null;
 		}
 
-		logger.info('WindowsStrategy', `WMIC: Found ${candidates.length} Antigravity process(es), using PID: ${candidates[0].pid}`);
-		return candidates[0];
+		const command_line = full_args.trim();
+		const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
+		const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
+
+		if (!token_match) {
+			return null;
+		}
+
+		return {
+			pid,
+			extension_port: port_match ? parseInt(port_match[1], 10) : 0,
+			csrf_token: token_match[1],
+			command_line,
+		};
 	}
 
 	get_port_list_command(pid: number): string {
@@ -243,32 +245,81 @@ export class UnixStrategy implements platform_strategy {
 		this.platform = platform;
 	}
 
-	get_process_list_command(process_name: string): string {
+	get_process_list_commands(process_name: string): { name: string; command: string }[] {
+		// Tiered discovery: Tier 1 (current user), Tier 2 (global)
 		if (this.platform === 'darwin') {
-			return `pgrep -fl ${process_name}`;
+			return [
+				{ name: 'User (macOS)', command: `pgrep -u $(id -u) -fl ${process_name}` },
+				{ name: 'Global (macOS)', command: `pgrep -fl ${process_name}` },
+			];
 		}
-		return `pgrep -af ${process_name}`;
+		return [
+			{ name: 'User (Linux)', command: `pgrep -u $(id -u) -af ${process_name}` },
+			{ name: 'Global (Linux)', command: `pgrep -af ${process_name}` },
+		];
 	}
 
-	parse_process_info(stdout: string): {pid: number; extension_port: number; csrf_token: string} | null {
+	parse_process_info(stdout: string): candidate_info[] {
+		const candidates: candidate_info[] = [];
 		const lines = stdout.split('\n');
+
 		for (const line of lines) {
-			if (line.includes('--extension_server_port')) {
-				const parts = line.trim().split(/\s+/);
-				const pid = parseInt(parts[0], 10);
-				const cmd = line.substring(parts[0].length).trim();
-
-				const port_match = cmd.match(/--extension_server_port[=\s]+(\d+)/);
-				const token_match = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
-
-				return {
-					pid,
-					extension_port: port_match ? parseInt(port_match[1], 10) : 0,
-					csrf_token: token_match ? token_match[1] : '',
-				};
+			if (!line.trim()) {
+				continue;
 			}
+
+			const parts = line.trim().split(/\s+/);
+			const pid = parseInt(parts[0], 10);
+
+			if (isNaN(pid)) {
+				continue;
+			}
+
+			const cmd = line.substring(parts[0].length).trim();
+
+			// Extract port and token if available
+			const port_match = cmd.match(/--extension_server_port[=\s]+(\d+)/);
+			const token_match = cmd.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
+
+			// Return ALL PIDs, even if token is missing (crucial for macOS truncation)
+			candidates.push({
+				pid,
+				extension_port: port_match ? parseInt(port_match[1], 10) : 0,
+				csrf_token: token_match ? token_match[1] : '',
+				command_line: cmd,
+			});
+
+			logger.debug('UnixStrategy', `Added candidate: PID=${pid}, token=${token_match ? 'FOUND' : 'MISSING'}`);
 		}
-		return null;
+
+		logger.info('UnixStrategy', `Found ${candidates.length} candidate(s)`);
+		return candidates;
+	}
+
+	get_full_command_line_command(pid: number): string | null {
+		// ps -ww gives full command line on macOS/Linux
+		return `ps -ww -p ${pid} -o args=`;
+	}
+
+	parse_command_line(pid: number, full_args: string): candidate_info | null {
+		if (!full_args || full_args.trim() === '') {
+			return null;
+		}
+
+		const command_line = full_args.trim();
+		const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
+		const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
+
+		if (!token_match) {
+			return null;
+		}
+
+		return {
+			pid,
+			extension_port: port_match ? parseInt(port_match[1], 10) : 0,
+			csrf_token: token_match[1],
+			command_line,
+		};
 	}
 
 	get_port_list_command(pid: number): string {
