@@ -244,31 +244,78 @@ export class UnixStrategy implements platform_strategy {
 	}
 
 	get_process_list_command(process_name: string): string {
+		// LC_ALL=C avoids pgrep aborting on invalid UTF-8 in unrelated process args (macOS Sequoia+).
 		if (this.platform === 'darwin') {
-			return `pgrep -fl ${process_name}`;
+			return `LC_ALL=C pgrep -fl ${process_name}`;
 		}
-		return `pgrep -af ${process_name}`;
+		return `LC_ALL=C pgrep -af ${process_name}`;
+	}
+
+	/**
+	 * Determine if a command line belongs to an Antigravity process.
+	 * Checks for --app_data_dir antigravity parameter or antigravity in the path.
+	 */
+	private is_antigravity_process(command_line: string): boolean {
+		const lower_cmd = command_line.toLowerCase();
+
+		if (/--app_data_dir\s+antigravity\b/i.test(command_line)) {
+			logger.debug('UnixStrategy', `Process identified as Antigravity (--app_data_dir match)`);
+			return true;
+		}
+
+		if (lower_cmd.includes('\\antigravity\\') || lower_cmd.includes('/antigravity/')) {
+			logger.debug('UnixStrategy', `Process identified as Antigravity (path match)`);
+			return true;
+		}
+
+		logger.debug('UnixStrategy', `Process is NOT Antigravity`);
+		return false;
 	}
 
 	parse_process_info(stdout: string): {pid: number; extension_port: number; csrf_token: string} | null {
-		const lines = stdout.split('\n');
+		const lines = stdout.split('\n').filter(line => line.trim().length > 0);
+		const candidates: Array<{pid: number; extension_port: number; csrf_token: string}> = [];
+
 		for (const line of lines) {
-			if (line.includes('--extension_server_port')) {
-				const parts = line.trim().split(/\s+/);
-				const pid = parseInt(parts[0], 10);
-				const cmd = line.substring(parts[0].length).trim();
-
-				const port_match = cmd.match(/--extension_server_port[=\s]+(\d+)/);
-				const token_match = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
-
-				return {
-					pid,
-					extension_port: port_match ? parseInt(port_match[1], 10) : 0,
-					csrf_token: token_match ? token_match[1] : '',
-				};
+			if (!line.includes('--extension_server_port')) {
+				continue;
 			}
+
+			const parts = line.trim().split(/\s+/);
+			const pid = parseInt(parts[0], 10);
+			const cmd = line.substring(parts[0].length).trim();
+
+			if (!this.is_antigravity_process(cmd)) {
+				continue;
+			}
+
+			const port_match = cmd.match(/--extension_server_port[=\s]+(\d+)/);
+			const token_match = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
+
+			if (!token_match?.[1]) {
+				logger.debug('UnixStrategy', `PID ${pid} has no CSRF token, skipping`);
+				continue;
+			}
+
+			candidates.push({
+				pid,
+				extension_port: port_match ? parseInt(port_match[1], 10) : 0,
+				csrf_token: token_match[1],
+			});
 		}
-		return null;
+
+		if (candidates.length === 0) {
+			logger.warn('UnixStrategy', 'No Antigravity language_server process found');
+			return null;
+		}
+
+		if (candidates.length > 1) {
+			logger.info('UnixStrategy', `Found ${candidates.length} Antigravity process(es), using PID: ${candidates[0].pid}`);
+		} else {
+			logger.info('UnixStrategy', `Found 1 Antigravity process, PID: ${candidates[0].pid}`);
+		}
+
+		return candidates[0];
 	}
 
 	get_port_list_command(pid: number): string {

@@ -4,6 +4,9 @@
 
 import * as https from 'https';
 import {quota_snapshot, model_quota_info, prompt_credits_info, server_user_status_response} from '../utils/types';
+import {logger} from '../utils/logger';
+
+export const RECONNECT_REQUIRED = 'RECONNECT_REQUIRED';
 
 export class QuotaManager {
 	private port: number = 0;
@@ -12,12 +15,15 @@ export class QuotaManager {
 	private update_callback?: (snapshot: quota_snapshot) => void;
 	private error_callback?: (error: Error) => void;
 	private polling_timer?: NodeJS.Timeout;
+	private consecutive_errors = 0;
+	private readonly MAX_CONSECUTIVE_ERRORS = 3;
 
 	constructor() {}
 
 	init(port: number, csrf_token: string) {
 		this.port = port;
 		this.csrf_token = csrf_token;
+		this.consecutive_errors = 0;
 	}
 
 	private request<T>(path: string, body: object): Promise<T> {
@@ -93,16 +99,32 @@ export class QuotaManager {
 			});
 
 			const snapshot = this.parse_response(data);
+			this.consecutive_errors = 0;
 
 			if (this.update_callback) {
 				this.update_callback(snapshot);
 			}
 		} catch (error: any) {
-			console.error('Quota fetch error:', error.message);
-			if (this.error_callback) {
+			this.consecutive_errors++;
+			logger.error(
+				'QuotaManager',
+				`Fetch failed (${this.consecutive_errors}/${this.MAX_CONSECUTIVE_ERRORS}): ${error.message}`
+			);
+
+			if (this.consecutive_errors >= this.MAX_CONSECUTIVE_ERRORS) {
+				this.consecutive_errors = 0;
+				if (this.error_callback) {
+					logger.warn('QuotaManager', 'Triggering reconnect after consecutive failures', error);
+					this.error_callback(new Error(RECONNECT_REQUIRED));
+				}
+			} else if (this.error_callback) {
 				this.error_callback(error);
 			}
 		}
+	}
+
+	private get_quota_info(model: any): any | undefined {
+		return model.quotaInfo ?? model.quota_info;
 	}
 
 	private parse_response(data: server_user_status_response): quota_snapshot {
@@ -126,25 +148,47 @@ export class QuotaManager {
 		}
 
 		const raw_models = user_status.cascadeModelConfigData?.clientModelConfigs || [];
-		const models: model_quota_info[] = raw_models
-			.filter((m: any) => m.quotaInfo)
-			.map((m: any) => {
-				const reset_time = new Date(m.quotaInfo.resetTime);
-				const now = new Date();
-				const diff = reset_time.getTime() - now.getTime();
 
-				return {
-					label: m.label,
-					model_id: m.modelOrAlias?.model || 'unknown',
-					remaining_fraction: m.quotaInfo.remainingFraction,
-					remaining_percentage: m.quotaInfo.remainingFraction !== undefined ? m.quotaInfo.remainingFraction * 100 : undefined,
-					is_exhausted: m.quotaInfo.remainingFraction === 0,
-					reset_time: reset_time,
-					time_until_reset: diff,
-					time_until_reset_formatted: this.format_time(diff, reset_time),
-				};
-			});
+		logger.debug('QuotaManager', 'Raw model configs:', {
+			total: raw_models.length,
+			with_quota: raw_models.filter((m: any) => this.get_quota_info(m)).length,
+			models: raw_models.map((m: any) => ({
+				label: m.label,
+				model_id: m.modelOrAlias?.model ?? m.model_or_alias?.model,
+				has_quota: !!this.get_quota_info(m),
+			})),
+		});
 
+		const models_without_quota = raw_models.filter((m: any) => !this.get_quota_info(m));
+		if (models_without_quota.length > 0) {
+			logger.warn(
+				'QuotaManager',
+				`${models_without_quota.length} model(s) missing quota info:`,
+				models_without_quota.map((m: any) => m.label)
+			);
+		}
+
+		const models: model_quota_info[] = raw_models.map((m: any) => {
+			const quota_info = this.get_quota_info(m);
+			const reset_time_raw = quota_info?.resetTime ?? quota_info?.reset_time;
+			const reset_time = reset_time_raw ? new Date(reset_time_raw) : new Date(0);
+			const now = new Date();
+			const diff = reset_time.getTime() - now.getTime();
+			const remaining_fraction = quota_info?.remainingFraction ?? quota_info?.remaining_fraction;
+
+			return {
+				label: m.label,
+				model_id: m.modelOrAlias?.model ?? m.model_or_alias?.model ?? 'unknown',
+				remaining_fraction,
+				remaining_percentage: remaining_fraction !== undefined ? remaining_fraction * 100 : undefined,
+				is_exhausted: remaining_fraction === 0,
+				reset_time: reset_time,
+				time_until_reset: quota_info ? diff : 0,
+				time_until_reset_formatted: quota_info ? this.format_time(diff, reset_time) : 'Unknown',
+			};
+		});
+
+		models.sort((a, b) => a.label.localeCompare(b.label));
 		return {
 			timestamp: new Date(),
 			prompt_credits,

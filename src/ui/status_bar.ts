@@ -7,14 +7,14 @@ import {quota_snapshot, model_quota_info} from '../utils/types';
 
 /** Mapping of model labels to short abbreviations for status bar display */
 const MODEL_ABBREVIATIONS: Record<string, string> = {
-	'Gemini 3.5 Flash (Low)': 'Gemini 3.5F(L)',
-	'Gemini 3.5 Flash (Medium)': 'Gemini 3.5F(M)',
-	'Gemini 3.5 Flash (High)': 'Gemini 3.5F(H)',
-	'Gemini 3.1 Pro (High)': 'Gemini 3.1P(H)',
-	'Gemini 3.1 Pro (Low)': 'Gemini 3.1P(L)',
-	'Gemini 3 Pro (High)': 'Gemini 3P(H)',
-	'Gemini 3 Pro (Low)': 'Gemini 3P(L)',
-	'Gemini 3 Flash': 'Gemini 3F',
+	'Gemini 3.5 Flash (Low)': 'G3.5F(L)',
+	'Gemini 3.5 Flash (Medium)': 'G3.5F(M)',
+	'Gemini 3.5 Flash (High)': 'G3.5F(H)',
+	'Gemini 3.1 Pro (High)': 'G3.1P(H)',
+	'Gemini 3.1 Pro (Low)': 'G3.1P(L)',
+	'Gemini 3 Pro (High)': 'G3P(H)',
+	'Gemini 3 Pro (Low)': 'G3P(L)',
+	'Gemini 3 Flash': 'G3F',
 	'Claude Sonnet 4.6 (Thinking)': 'Claude S4.6T',
 	'Claude Opus 4.6 (Thinking)': 'Claude O4.6T',
 	'Claude Sonnet 4.5': 'Claude S4.5',
@@ -79,8 +79,9 @@ export class StatusBarManager {
 			parts.push(`${icon} Credits: ${pc.available}/${pc.monthly}`);
 		}*/
 
-		// Filter models to only show pinned ones
-		const pinned_models = snapshot.models.filter(m => pinned.includes(m.model_id));
+		const pinned_models = snapshot.models
+			.filter(m => pinned.includes(m.model_id))
+			.sort((a, b) => a.label.localeCompare(b.label));
 
 		if (pinned_models.length === 0 && !show_credits) {
 			// Show default text if nothing is pinned
@@ -168,18 +169,19 @@ export class StatusBarManager {
 
 		if (snapshot && snapshot.models.length > 0) {
 			for (const m of snapshot.models) {
-				const pct = m.remaining_percentage ?? 0;
-				const bar = this.draw_progress_bar(pct);
+				const pct = m.remaining_percentage;
+				const pct_display = pct !== undefined ? `${pct.toFixed(1)}%` : 'N/A';
+				const bar = pct !== undefined ? this.draw_progress_bar(pct) : '░'.repeat(10);
 				const is_pinned = pinned.includes(m.model_id);
 
 				// Use checkmark to show if model is selected for status bar
 				const selection_icon = is_pinned ? '$(check)' : '$(circle-outline)';
 				// Show quota status separately
-				const status_icon = m.is_exhausted ? '$(error)' : pct < 20 ? '$(warning)' : '';
+				const status_icon = m.is_exhausted ? '$(error)' : pct !== undefined && pct < 20 ? '$(warning)' : '';
 
 				const item: vscode.QuickPickItem & {model_id?: string} = {
 					label: `${selection_icon} ${status_icon ? status_icon + ' ' : ''}${m.label}`,
-					description: `${bar} ${pct.toFixed(1)}%`,
+					description: `${bar} ${pct_display}`,
 					detail: `    Resets in: ${m.time_until_reset_formatted}`,
 				};
 

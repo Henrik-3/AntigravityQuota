@@ -2,7 +2,7 @@
   "name": "ag-quota",
   "displayName": "Antigravity Quota (AGQ)",
   "description": "VS Code extension for the Antigravity IDE to monitor the usage of the models",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "henrikdev",
   "icon": "assets/AntiGravityQuota.png",
   "engines": {
@@ -71,6 +71,7 @@
   },
   "scripts": {
     "node:vsix:package": "npm run compile && npx vsce package",
+    "bunx:vsix:package": "bun run compile && bunx vsce package --no-dependencies",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts"

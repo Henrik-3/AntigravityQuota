@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import {ConfigManager} from './core/config_manager';
 import {ProcessFinder} from './core/process_finder';
-import {QuotaManager} from './core/quota_manager';
+import {QuotaManager, RECONNECT_REQUIRED} from './core/quota_manager';
 import {StatusBarManager} from './ui/status_bar';
 import {logger} from './utils/logger';
 
@@ -14,6 +14,7 @@ let process_finder: ProcessFinder;
 let quota_manager: QuotaManager;
 let status_bar: StatusBarManager;
 let is_initialized = false;
+let is_reconnecting = false;
 
 export async function activate(context: vscode.ExtensionContext) {
 	logger.init(context);
@@ -63,10 +64,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('agq.reconnect', async () => {
 			logger.info('Extension', 'Reconnect triggered');
 			vscode.window.showInformationMessage('Reconnecting to Antigravity process...');
-			is_initialized = false;
-			quota_manager.stop_polling();
-			status_bar.show_loading();
-			await initialize_extension();
+			await reconnect_extension();
 		})
 	);
 
@@ -90,6 +88,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	});
 
 	quota_manager.on_error(err => {
+		if (err.message === RECONNECT_REQUIRED) {
+			logger.warn('Extension', 'Connection lost, attempting automatic reconnect...');
+			void reconnect_extension();
+			return;
+		}
 		logger.error('Extension', `Quota error: ${err.message}`);
 		status_bar.show_error(err.message);
 	});
@@ -114,6 +117,23 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 
 	logger.info('Extension', 'Extension activation complete');
+}
+
+async function reconnect_extension() {
+	if (is_reconnecting) {
+		logger.debug('Extension', 'Reconnect already in progress, skipping');
+		return;
+	}
+
+	is_reconnecting = true;
+	try {
+		is_initialized = false;
+		quota_manager.stop_polling();
+		status_bar.show_loading();
+		await initialize_extension();
+	} finally {
+		is_reconnecting = false;
+	}
 }
 
 async function initialize_extension() {
