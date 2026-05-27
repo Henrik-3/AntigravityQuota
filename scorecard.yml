@@ -1,0 +1,39 @@
+name: Scorecard supply-chain security
+on:
+  # Se ejecuta cada vez que hay cambios en la rama principal
+  push:
+    branches: [ "main" ]
+  # Se ejecuta semanalmente para mantener el reporte actualizado
+  schedule:
+    - cron: '30 1 * * 5'
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Necesario para subir los resultados a la pestaña de Seguridad
+      security-events: write
+      # Necesario para publicar los resultados en el visor público de OpenSSF
+      id-token: write
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false
+
+      - name: "Run analysis"
+        uses: ossf/scorecard-action@v2.2.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publica los resultados para que se vean en scorecard.dev
+          publish_results: true
+
+      - name: "Upload to code-scanning"
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: results.sarif
