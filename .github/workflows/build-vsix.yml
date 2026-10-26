@@ -6,6 +6,11 @@ on:
     pull_request:
         branches: [main]
     workflow_dispatch:
+    release:
+        types: [published]
+
+permissions:
+    contents: write
 
 jobs:
     build:
@@ -24,6 +29,10 @@ jobs:
             - name: Install dependencies
               run: npm ci
 
+            - name: Set version from release tag
+              if: github.event_name == 'release'
+              run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+
             - name: Compile TypeScript
               run: npm run compile
 
@@ -36,3 +45,9 @@ jobs:
                   name: ag-quota-vsix
                   path: '*.vsix'
                   retention-days: 14
+
+            - name: Attach VSIX to release
+              if: github.event_name == 'release'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: gh release upload "$GITHUB_REF_NAME" *.vsix --clobber
