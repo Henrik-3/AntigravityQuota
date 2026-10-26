@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Antigravity Quota Watcher - Main Entry
  */
 
@@ -84,7 +84,11 @@ export async function activate(context: vscode.ExtensionContext) {
 			prompt_credits: snapshot.prompt_credits,
 			timestamp: snapshot.timestamp,
 		});
-		status_bar.update(snapshot, current_config.show_prompt_credits ?? false);
+		status_bar.update(
+			snapshot,
+			current_config.show_prompt_credits ?? false,
+			current_config.display_mode
+		);
 	});
 
 	quota_manager.on_error(err => {
@@ -108,11 +112,15 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		config_manager.on_config_change(new_config => {
 			logger.info('Extension', 'Config changed:', new_config);
-			if (new_config.enabled) {
+			if (new_config.enabled && is_initialized) {
 				quota_manager.start_polling(new_config.polling_interval);
-			} else {
+			} else if (!new_config.enabled) {
 				quota_manager.stop_polling();
 			}
+			status_bar.refresh_cached_snapshot(
+				new_config.show_prompt_credits ?? false,
+				new_config.display_mode
+			);
 		})
 	);
 
@@ -161,9 +169,10 @@ async function initialize_extension() {
 
 			quota_manager.init(process_info.connect_port, process_info.csrf_token);
 
-			if (config.enabled) {
-				logger.debug('Extension', `Starting polling with interval: ${config.polling_interval}ms`);
-				quota_manager.start_polling(config.polling_interval);
+			const current_config = config_manager.get_config();
+			if (current_config.enabled) {
+				logger.debug('Extension', `Starting polling with interval: ${current_config.polling_interval}ms`);
+				quota_manager.start_polling(current_config.polling_interval);
 			}
 			is_initialized = true;
 			logger.info('Extension', 'Initialization successful');

@@ -65,6 +65,26 @@
           "default": false,
           "description": "Show prompt credits in the status bar.",
           "order": 4
+        },
+        "agq.displayMode": {
+          "type": "string",
+          "enum": [
+            "models",
+            "groups",
+            "both"
+          ],
+          "default": "models",
+          "description": "Status bar display mode: 'models' (pinned models), 'groups' (shared 5h/weekly quota groups), or 'both'.",
+          "order": 5
+        },
+        "agq.pinnedGroups": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Quota group names to display in the status bar (e.g. ['Gemini', 'Claude']). If empty, all groups are displayed.",
+          "order": 6
         }
       }
     }
@@ -74,7 +94,8 @@
     "bunx:vsix:package": "bun run compile && bunx vsce package --no-dependencies",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile && node src/test/run.js"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
