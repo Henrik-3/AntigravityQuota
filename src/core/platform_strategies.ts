@@ -109,7 +109,7 @@ export class WindowsStrategy implements platform_strategy {
 				}
 
 				const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
-				const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
+				const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9-]+)/i);
 
 				logger.debug(
 					'WindowsStrategy',
@@ -156,7 +156,7 @@ export class WindowsStrategy implements platform_strategy {
 			}
 
 			const port_match = command_line.match(/--extension_server_port[=\s]+(\d+)/);
-			const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9\-]+)/i);
+			const token_match = command_line.match(/--csrf_token[=\s]+([a-f0-9-]+)/i);
 
 			if (!token_match || !token_match[1]) {
 				logger.debug('WindowsStrategy', `WMIC: PID ${pid_match[1]} has no CSRF token, skipping`);
@@ -290,7 +290,7 @@ export class UnixStrategy implements platform_strategy {
 			}
 
 			const port_match = cmd.match(/--extension_server_port[=\s]+(\d+)/);
-			const token_match = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
+			const token_match = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9-]+)/);
 
 			if (!token_match?.[1]) {
 				logger.debug('UnixStrategy', `PID ${pid} has no CSRF token, skipping`);
