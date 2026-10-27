@@ -153,7 +153,6 @@ async function initialize_extension() {
 	logger.section('Extension', 'Initializing Extension');
 	const timer = logger.time_start('initialize_extension');
 
-	const config = config_manager.get_config();
 	status_bar.show_loading();
 
 	try {
