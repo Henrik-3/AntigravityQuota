@@ -312,6 +312,10 @@ describe('UI Utilities', () => {
 	it('should filter pinned groups correctly', () => {
 		assert.strictEqual(is_group_pinned('Gemini Models', []), true);
 		assert.strictEqual(is_group_pinned('Gemini Models', ['Gemini']), true);
+		assert.strictEqual(is_group_pinned('Gemini 4 Argon', ['Gemini']), false);
+		assert.strictEqual(is_group_pinned('Gemini 4 Argon', ['Gemini 4 Argon']), true);
+		assert.strictEqual(is_group_pinned('Gemini 4 Argon', ['Argon']), true);
+		assert.strictEqual(is_group_pinned('Gemini Models', ['Gemini 4 Argon']), false);
 		assert.strictEqual(is_group_pinned('Claude and GPT models', ['Gemini']), false);
 		assert.strictEqual(is_group_pinned('Claude and GPT models', ['Claude']), true);
 		assert.strictEqual(is_group_pinned('Claude and GPT models', ['Claude and GPT models']), true);
@@ -322,7 +326,9 @@ describe('UI Utilities', () => {
 
 	it('should get short name for quota groups', () => {
 		assert.strictEqual(get_group_short_name('Gemini Models'), 'Gemini');
+		assert.strictEqual(get_group_short_name('Gemini 4 Argon'), 'Gemini 4 Argon');
 		assert.strictEqual(get_group_short_name('Claude and GPT models'), 'Claude/GPT');
+		assert.strictEqual(get_group_short_name('Custom Future Models'), 'Custom Future');
 	});
 });
 
@@ -422,6 +428,11 @@ describe('StatusBarManager - build_menu_items', () => {
 		setMockConfig('agq.pinnedGroups', ['Gemini']);
 		await (sb as any).toggle_pinned_group('Claude/GPT', 'Claude and GPT models');
 		assert.deepStrictEqual(getMockConfig('agq.pinnedGroups'), ['Gemini', 'Claude/GPT']);
+
+		// 4. Unpinning Gemini 4 Argon should not unpin Gemini Models
+		setMockConfig('agq.pinnedGroups', ['Gemini', 'Gemini 4 Argon']);
+		await (sb as any).toggle_pinned_group('Gemini 4 Argon', 'Gemini 4 Argon');
+		assert.deepStrictEqual(getMockConfig('agq.pinnedGroups'), ['Gemini']);
 	});
 
 	it('should not fallback to models in groups mode when groups exist but none match pinned filter', () => {

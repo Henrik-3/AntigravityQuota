@@ -3,7 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import {quota_snapshot, model_quota_info, quota_group_info, display_mode} from '../utils/types';
+import {quota_snapshot, quota_group_info, display_mode} from '../utils/types';
 import {ConfigManager} from '../core/config_manager';
 
 /** Mapping of model labels to short abbreviations for status bar display */
@@ -46,12 +46,14 @@ export function get_abbreviation(label: string): string {
 
 /** Get short label for a quota group */
 export function get_group_short_name(group_name: string): string {
-	const lower = group_name.toLowerCase();
-	if (lower.includes('gemini')) return 'Gemini';
+	const trimmed = group_name.trim();
+	const lower = trimmed.toLowerCase();
 	if (lower.includes('claude') && lower.includes('gpt')) return 'Claude/GPT';
+	if (lower === 'gemini' || lower === 'gemini models') return 'Gemini';
 	if (lower.includes('claude')) return 'Claude';
 	if (lower.includes('gpt')) return 'GPT';
-	return group_name.split(/\s+/)[0] || group_name;
+	const stripped = trimmed.replace(/\s+models$/i, '');
+	return stripped || group_name;
 }
 
 /** Format a single quota group into status bar string */
@@ -99,9 +101,13 @@ export function is_group_pinned(group_name: string, pinned_groups: string[]): bo
 	const short_name = get_group_short_name(group_name).toLowerCase();
 	const full_name = group_name.toLowerCase();
 	return pinned_groups.some(p => {
-		const target = p.toLowerCase();
+		const target = p.toLowerCase().trim();
 		if (target === short_name || target === full_name) {
 			return true;
+		}
+		// Prevent the generic 'gemini' group key from matching specific Gemini subgroups (e.g. 'Gemini 4 Argon')
+		if (target === 'gemini' && short_name !== 'gemini') {
+			return false;
 		}
 		// Word-boundary matching (e.g. 'GPT' or 'Claude' matches 'Claude and GPT models' or 'Claude/GPT')
 		const regex = new RegExp(`(^|[\\s/\\-_,.])${escape_regex(target)}($|[\\s/\\-_,.])`, 'i');
