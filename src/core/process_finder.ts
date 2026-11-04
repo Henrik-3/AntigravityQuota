@@ -32,10 +32,10 @@ export class ProcessFinder {
 			this.process_name = `language_server_windows_${process.arch === 'arm64' ? 'arm' : 'x64'}.exe`;
 		} else if (process.platform === 'darwin') {
 			this.strategy = new UnixStrategy('darwin');
-			this.process_name = `language_server_macos${process.arch === 'arm64' ? '_arm' : ''}`;
+			this.process_name = `(language_server|agy)`;
 		} else {
 			this.strategy = new UnixStrategy('linux');
-			this.process_name = `language_server_linux${process.arch === 'arm64' ? '_arm' : '_x64'}`;
+			this.process_name = `(language_server|agy)`;
 		}
 
 		logger.info(LOG_CAT, `Target process name: ${this.process_name}`);
