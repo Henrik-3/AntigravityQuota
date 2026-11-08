@@ -5,7 +5,7 @@
 import {exec} from 'child_process';
 import {promisify} from 'util';
 import * as https from 'https';
-import {WindowsStrategy, UnixStrategy, platform_strategy} from './platform_strategies';
+import {WindowsStrategy, UnixStrategy, platform_strategy, process_candidate} from './platform_strategies';
 import * as process from 'process';
 import * as vscode from 'vscode';
 import {logger} from '../utils/logger';
@@ -22,23 +22,34 @@ const LOG_CAT = 'ProcessFinder';
 
 export class ProcessFinder {
 	private strategy: platform_strategy;
-	private process_name: string;
+	private process_names: string[];
 
 	constructor() {
 		logger.debug(LOG_CAT, `Initializing ProcessFinder for platform: ${process.platform}, arch: ${process.arch}`);
 
 		if (process.platform === 'win32') {
 			this.strategy = new WindowsStrategy();
-			this.process_name = `language_server_windows_${process.arch === 'arm64' ? 'arm' : 'x64'}.exe`;
+			this.process_names = [
+				'agy.exe',
+				`language_server_windows_${process.arch === 'arm64' ? 'arm' : 'x64'}.exe`,
+			];
 		} else if (process.platform === 'darwin') {
 			this.strategy = new UnixStrategy('darwin');
-			this.process_name = `language_server_macos${process.arch === 'arm64' ? '_arm' : ''}`;
+			this.process_names = [
+				'agy',
+				'language_server',
+				`language_server_macos${process.arch === 'arm64' ? '_arm' : ''}`,
+			];
 		} else {
 			this.strategy = new UnixStrategy('linux');
-			this.process_name = `language_server_linux${process.arch === 'arm64' ? '_arm' : '_x64'}`;
+			this.process_names = [
+				'agy',
+				'language_server',
+				`language_server_linux${process.arch === 'arm64' ? '_arm' : '_x64'}`,
+			];
 		}
 
-		logger.info(LOG_CAT, `Target process name: ${this.process_name}`);
+		logger.info(LOG_CAT, `Target process names: ${this.process_names.join(', ')}`);
 	}
 
 	async detect_process_info(max_retries: number = 1): Promise<process_info | null> {
@@ -49,7 +60,7 @@ export class ProcessFinder {
 			logger.debug(LOG_CAT, `Attempt ${i + 1}/${max_retries}`);
 
 			try {
-				const cmd = this.strategy.get_process_list_command(this.process_name);
+				const cmd = this.strategy.get_process_list_command(this.process_names);
 				logger.debug(LOG_CAT, `Executing process list command:\n${cmd}`);
 
 				const {stdout, stderr} = await exec_async(cmd);
@@ -60,38 +71,43 @@ export class ProcessFinder {
 
 				logger.debug(LOG_CAT, `Raw stdout (${stdout.length} chars):\n${stdout}`);
 
-				const info = this.strategy.parse_process_info(stdout);
+				const candidates = this.strategy.parse_process_info(stdout);
 
-				if (info) {
-					logger.info(LOG_CAT, `Process info parsed successfully:`, {
-						pid: info.pid,
-						extension_port: info.extension_port,
-						csrf_token: `${info.csrf_token.substring(0, 8)}...`,
-					});
+				if (candidates && candidates.length > 0) {
+					logger.info(LOG_CAT, `Found ${candidates.length} parsed process candidate(s)`);
 
-					logger.debug(LOG_CAT, `Getting listening ports for PID: ${info.pid}`);
-					const ports = await this.get_listening_ports(info.pid);
+					// Evaluate each eligible candidate in priority order until one passes the port check
+					for (let c = 0; c < candidates.length; c++) {
+						const info: process_candidate = candidates[c];
+						logger.debug(
+							LOG_CAT,
+							`Evaluating candidate ${c + 1}/${candidates.length}: PID=${info.pid}, extension_port=${info.extension_port}`
+						);
 
-					logger.debug(LOG_CAT, `Found ${ports.length} listening port(s): [${ports.join(', ')}]`);
+						const ports = await this.get_listening_ports(info.pid);
+						logger.debug(LOG_CAT, `Found ${ports.length} listening port(s) for PID ${info.pid}: [${ports.join(', ')}]`);
 
-					if (ports.length > 0) {
-						logger.debug(LOG_CAT, `Testing ports to find working endpoint...`);
-						const valid_port = await this.find_working_port(ports, info.csrf_token);
+						if (ports.length > 0) {
+							logger.debug(LOG_CAT, `Testing ports for PID ${info.pid}...`);
+							const valid_port = await this.find_working_port(ports, info.csrf_token);
 
-						if (valid_port) {
-							logger.info(LOG_CAT, `SUCCESS: Valid port found: ${valid_port}`);
-							timer();
-							return {
-								extension_port: info.extension_port,
-								connect_port: valid_port,
-								csrf_token: info.csrf_token,
-							};
+							if (valid_port) {
+								logger.info(LOG_CAT, `SUCCESS: Valid port found: ${valid_port} for PID ${info.pid}`);
+								timer();
+								return {
+									extension_port: info.extension_port,
+									connect_port: valid_port,
+									csrf_token: info.csrf_token,
+								};
+							} else {
+								logger.warn(LOG_CAT, `No ports responded successfully to health check for PID ${info.pid}`);
+							}
 						} else {
-							logger.warn(LOG_CAT, `No ports responded successfully to health check`);
+							logger.warn(LOG_CAT, `No listening ports found for PID ${info.pid}`);
 						}
-					} else {
-						logger.warn(LOG_CAT, `No listening ports found for PID ${info.pid}`);
 					}
+
+					logger.warn(LOG_CAT, `None of the ${candidates.length} candidate(s) passed the port check`);
 				} else {
 					logger.warn(LOG_CAT, `Failed to parse process info from command output`);
 				}
