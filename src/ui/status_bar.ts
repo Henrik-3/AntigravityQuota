@@ -3,7 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import {quota_snapshot, model_quota_info, quota_group_info, display_mode} from '../utils/types';
+import {quota_snapshot, quota_group_info, display_mode} from '../utils/types';
 import {ConfigManager} from '../core/config_manager';
 
 /** Mapping of model labels to short abbreviations for status bar display */
