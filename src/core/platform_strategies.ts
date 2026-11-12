@@ -179,7 +179,8 @@ export class WindowsStrategy implements platform_strategy {
 
 	get_port_list_command(pid: number): string {
 		if (this.use_powershell) {
-			return `powershell -NoProfile -Command "Get-NetTCPConnection -OwningProcess ${pid} -State Listen | Select-Object -ExpandProperty LocalPort | ConvertTo-Json"`;
+			// agy.exe loopback server sockets report raw State=0 instead of Listen, so `-State Listen` finds nothing (#37)
+			return `powershell -NoProfile -Command "@(Get-NetTCPConnection -OwningProcess ${pid} -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' -or (($_.LocalAddress -eq '127.0.0.1' -or $_.LocalAddress -eq '::1') -and $_.RemotePort -eq 0) } | Select-Object -ExpandProperty LocalPort -Unique) | ConvertTo-Json"`;
 		}
 		return `netstat -ano | findstr "${pid}"`;
 	}
