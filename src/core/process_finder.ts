@@ -51,7 +51,7 @@ export class ProcessFinder {
 		logger.info(LOG_CAT, `Target process names: ${this.process_names.join(', ')}`);
 	}
 
-	async detect_process_info(max_retries: number = 1): Promise<process_info | null> {
+	async detect_process_info(max_retries: number = 12): Promise<process_info | null> {
 		logger.section(LOG_CAT, `Starting process detection (max_retries: ${max_retries})`);
 		const timer = logger.time_start('detect_process_info');
 
@@ -124,8 +124,10 @@ export class ProcessFinder {
 			}
 
 			if (i < max_retries - 1) {
-				logger.debug(LOG_CAT, `Waiting 100ms before retry...`);
-				await new Promise(r => setTimeout(r, 100));
+				// Backend (agy hub) may start after us on a fresh IDE launch: 1s, 2s, 4s, then 5s steps ≈ 47s total
+				const delay = Math.min(1000 * 2 ** i, 5000);
+				logger.debug(LOG_CAT, `Waiting ${delay}ms before retry...`);
+				await new Promise(r => setTimeout(r, delay));
 			}
 		}
 
