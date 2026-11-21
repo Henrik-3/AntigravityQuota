@@ -163,10 +163,11 @@ async function initialize_extension() {
 			logger.info('Extension', 'Process found successfully', {
 				extension_port: process_info.extension_port,
 				connect_port: process_info.connect_port,
+				use_tls: process_info.use_tls,
 				csrf_token: process_info.csrf_token.substring(0, 8) + '...',
 			});
 
-			quota_manager.init(process_info.connect_port, process_info.csrf_token);
+			quota_manager.init(process_info.connect_port, process_info.csrf_token, process_info.use_tls);
 
 			const current_config = config_manager.get_config();
 			if (current_config.enabled) {

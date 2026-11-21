@@ -4,6 +4,7 @@
 
 import {exec} from 'child_process';
 import {promisify} from 'util';
+import * as http from 'http';
 import * as https from 'https';
 import {WindowsStrategy, UnixStrategy, platform_strategy, process_candidate} from './platform_strategies';
 import * as process from 'process';
@@ -15,6 +16,12 @@ export interface process_info {
 	extension_port: number;
 	connect_port: number;
 	csrf_token: string;
+	use_tls: boolean;
+}
+
+interface working_port_result {
+	port: number;
+	use_tls: boolean;
 }
 
 const LOG_CAT = 'ProcessFinder';
@@ -84,19 +91,24 @@ export class ProcessFinder {
 						);
 
 						const ports = await this.get_listening_ports(info.pid);
+						const ports_to_test =
+							info.extension_port > 0
+								? [info.extension_port, ...ports.filter(p => p !== info.extension_port)]
+								: ports;
 						logger.debug(LOG_CAT, `Found ${ports.length} listening port(s) for PID ${info.pid}: [${ports.join(', ')}]`);
 
-						if (ports.length > 0) {
-							logger.debug(LOG_CAT, `Testing ports for PID ${info.pid}...`);
-							const valid_port = await this.find_working_port(ports, info.csrf_token);
+						if (ports_to_test.length > 0) {
+							logger.debug(LOG_CAT, `Testing ports for PID ${info.pid}: [${ports_to_test.join(', ')}] (is_hub=${!!info.is_hub})...`);
+							const valid = await this.find_working_port(ports_to_test, info.csrf_token, !!info.is_hub);
 
-							if (valid_port) {
-								logger.info(LOG_CAT, `SUCCESS: Valid port found: ${valid_port} for PID ${info.pid}`);
+							if (valid) {
+								logger.info(LOG_CAT, `SUCCESS: Valid port found: ${valid.port} (use_tls=${valid.use_tls}) for PID ${info.pid}`);
 								timer();
 								return {
 									extension_port: info.extension_port,
-									connect_port: valid_port,
+									connect_port: valid.port,
 									csrf_token: info.csrf_token,
+									use_tls: valid.use_tls,
 								};
 							} else {
 								logger.warn(LOG_CAT, `No ports responded successfully to health check for PID ${info.pid}`);
@@ -162,30 +174,90 @@ export class ProcessFinder {
 		}
 	}
 
-	private async find_working_port(ports: number[], csrf_token: string): Promise<number | null> {
-		for (const port of ports) {
-			logger.debug(LOG_CAT, `Testing port ${port}...`);
-			const is_working = await this.test_port(port, csrf_token);
+	private async find_working_port(
+		ports: number[],
+		csrf_token: string,
+		is_hub: boolean = false
+	): Promise<working_port_result | null> {
+		// agy --hub serves HTTP natively; legacy language_server uses HTTPS.
+		const protocols = is_hub ? [false, true] : [true, false];
 
-			if (is_working) {
-				logger.info(LOG_CAT, `Port ${port} is working`);
-				return port;
-			} else {
-				logger.debug(LOG_CAT, `Port ${port} did not respond`);
+		for (const port of ports) {
+			for (const use_tls of protocols) {
+				const scheme = use_tls ? 'https' : 'http';
+				logger.debug(LOG_CAT, `Testing port ${port} (${scheme})...`);
+				const is_working = await this.test_port(port, csrf_token, use_tls);
+
+				if (is_working) {
+					logger.info(LOG_CAT, `Port ${port} (${scheme}) is working`);
+					return {port, use_tls};
+				} else {
+					logger.debug(LOG_CAT, `Port ${port} (${scheme}) did not respond`);
+				}
 			}
 		}
 		return null;
 	}
 
-	private test_port(port: number, csrf_token: string): Promise<boolean> {
+	private async test_port(port: number, csrf_token: string, use_tls: boolean = true): Promise<boolean> {
+		const unleash_result = await this.probe_endpoint(
+			port,
+			csrf_token,
+			use_tls,
+			'/exa.language_server_pb.LanguageServerService/GetUnleashData',
+			{
+				metadata: {
+					ideName: 'antigravity',
+					extensionName: 'antigravity',
+					ideVersion: 'unknown',
+					locale: 'en',
+				},
+			}
+		);
+		if (unleash_result.ok) {
+			return true;
+		}
+
+		// Secondary/hub ports on agy >=1.5.14 may return 404 on GetUnleashData
+		// while still serving GetUserStatus.
+		if (unleash_result.status === 404) {
+			const status_result = await this.probe_endpoint(
+				port,
+				csrf_token,
+				use_tls,
+				'/exa.language_server_pb.LanguageServerService/GetUserStatus',
+				{
+					metadata: {
+						ideName: 'antigravity',
+						extensionName: 'antigravity',
+						locale: 'en',
+					},
+				}
+			);
+			return status_result.ok;
+		}
+
+		return false;
+	}
+
+	private probe_endpoint(
+		port: number,
+		csrf_token: string,
+		use_tls: boolean,
+		path: string,
+		payload: object
+	): Promise<{ok: boolean; status?: number}> {
 		return new Promise(resolve => {
-			const options = {
+			const post_data = JSON.stringify(payload);
+			const scheme = use_tls ? 'https' : 'http';
+			const options: https.RequestOptions = {
 				hostname: '127.0.0.1',
 				port,
-				path: '/exa.language_server_pb.LanguageServerService/GetUnleashData',
+				path,
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
+					'Content-Length': Buffer.byteLength(post_data),
 					'X-Codeium-Csrf-Token': csrf_token,
 					'Connect-Protocol-Version': '1',
 				},
@@ -193,40 +265,44 @@ export class ProcessFinder {
 				timeout: 5000,
 			};
 
-			logger.debug(LOG_CAT, `HTTP request to https://127.0.0.1:${port}${options.path}`);
+			logger.debug(LOG_CAT, `HTTP request to ${scheme}://127.0.0.1:${port}${options.path}`);
 
-			const req = https.request(options, res => {
-				logger.debug(LOG_CAT, `Response from port ${port}: status=${res.statusCode}`);
+			const transport = use_tls ? https : http;
+			const req = transport.request(options, res => {
+				logger.debug(LOG_CAT, `Response from port ${port} (${scheme}): status=${res.statusCode}`);
 
 				let body = '';
 				res.on('data', chunk => (body += chunk));
 				res.on('end', () => {
-					if (res.statusCode === 200) {
+					if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
 						try {
-							JSON.parse(body);
-							resolve(true);
+							const parsed: unknown = JSON.parse(body);
+							resolve({
+								ok: parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed),
+								status: res.statusCode,
+							});
 						} catch {
-							logger.debug(LOG_CAT, `Port ${port} responded with 200 but body is not valid JSON`);
-							resolve(false);
+							logger.debug(LOG_CAT, `Port ${port} (${scheme}) responded with ${res.statusCode} but body is not valid JSON`);
+							resolve({ok: false, status: res.statusCode});
 						}
 					} else {
-						resolve(false);
+						resolve({ok: false, status: res.statusCode});
 					}
 				});
 			});
 
 			req.on('error', (err: any) => {
-				logger.debug(LOG_CAT, `Port ${port} connection error: ${err.code || err.message}`);
-				resolve(false);
+				logger.debug(LOG_CAT, `Port ${port} (${scheme}) connection error: ${err.code || err.message}`);
+				resolve({ok: false});
 			});
 
 			req.on('timeout', () => {
-				logger.debug(LOG_CAT, `Port ${port} connection timeout`);
+				logger.debug(LOG_CAT, `Port ${port} (${scheme}) connection timeout`);
 				req.destroy();
-				resolve(false);
+				resolve({ok: false});
 			});
 
-			req.write(JSON.stringify({wrapper_data: {}}));
+			req.write(post_data);
 			req.end();
 		});
 	}

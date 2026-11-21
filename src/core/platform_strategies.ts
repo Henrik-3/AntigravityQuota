@@ -4,6 +4,7 @@ export interface process_candidate {
 	pid: number;
 	extension_port: number;
 	csrf_token: string;
+	is_hub?: boolean;
 }
 
 export interface platform_strategy {
@@ -113,10 +114,11 @@ export class WindowsStrategy implements platform_strategy {
 
 					const extension_port = port_match && port_match[1] ? parseInt(port_match[1], 10) : 0;
 					const csrf_token = token_match[1];
+					const is_hub = /(?:^|\s)--hub(?:\s|=|$)/i.test(command_line);
 
-					logger.debug('WindowsStrategy', `Extracted: PID=${pid}, extension_port=${extension_port}, csrf_token=${csrf_token.substring(0, 8)}...`);
+					logger.debug('WindowsStrategy', `Extracted: PID=${pid}, extension_port=${extension_port}, is_hub=${is_hub}, csrf_token=${csrf_token.substring(0, 8)}...`);
 
-					candidates.push({pid, extension_port, csrf_token});
+					candidates.push({pid, extension_port, csrf_token, is_hub});
 				}
 
 				if (candidates.length === 0) {
@@ -163,9 +165,10 @@ export class WindowsStrategy implements platform_strategy {
 			const pid = parseInt(pid_match[1], 10);
 			const extension_port = port_match && port_match[1] ? parseInt(port_match[1], 10) : 0;
 			const csrf_token = token_match[1];
+			const is_hub = /(?:^|\s)--hub(?:\s|=|$)/i.test(command_line);
 
-			logger.debug('WindowsStrategy', `WMIC: Found candidate PID=${pid}, extension_port=${extension_port}`);
-			candidates.push({pid, extension_port, csrf_token});
+			logger.debug('WindowsStrategy', `WMIC: Found candidate PID=${pid}, extension_port=${extension_port}, is_hub=${is_hub}`);
+			candidates.push({pid, extension_port, csrf_token, is_hub});
 		}
 
 		if (candidates.length === 0) {
@@ -311,6 +314,7 @@ export class UnixStrategy implements platform_strategy {
 				pid,
 				extension_port: port_match ? parseInt(port_match[1], 10) : 0,
 				csrf_token: token_match[1],
+				is_hub: /(?:^|\s)--hub(?:\s|=|$)/i.test(cmd),
 			});
 		}
 
