@@ -183,11 +183,17 @@ export class QuotaManager {
 			return undefined;
 		}
 		const rt = typeof reset_time_raw === 'string' ? reset_time_raw.trim() : '';
-		if (!rt || rt === '1970-01-01T00:00:00Z') {
+		if (!rt) {
 			return 1;
 		}
 		const parsed_time = Date.parse(rt);
-		return Number.isFinite(parsed_time) && parsed_time > 0 ? 0 : undefined;
+		if (!Number.isFinite(parsed_time)) {
+			return undefined;
+		}
+		if (parsed_time === 0) {
+			return 1;
+		}
+		return parsed_time > 0 ? 0 : undefined;
 	}
 
 	/**

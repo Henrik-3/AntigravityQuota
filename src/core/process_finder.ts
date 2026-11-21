@@ -232,7 +232,8 @@ export class ProcessFinder {
 						extensionName: 'antigravity',
 						locale: 'en',
 					},
-				}
+				},
+				parsed => typeof parsed.userStatus === 'object' && parsed.userStatus !== null && !Array.isArray(parsed.userStatus)
 			);
 			return status_result.ok;
 		}
@@ -245,7 +246,8 @@ export class ProcessFinder {
 		csrf_token: string,
 		use_tls: boolean,
 		path: string,
-		payload: object
+		payload: object,
+		validate_body?: (parsed: Record<string, unknown>) => boolean
 	): Promise<{ok: boolean; status?: number}> {
 		return new Promise(resolve => {
 			const post_data = JSON.stringify(payload);
@@ -277,8 +279,10 @@ export class ProcessFinder {
 					if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
 						try {
 							const parsed: unknown = JSON.parse(body);
+							const is_obj = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+							const valid = is_obj && (!validate_body || validate_body(parsed as Record<string, unknown>));
 							resolve({
-								ok: parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed),
+								ok: valid,
 								status: res.statusCode,
 							});
 						} catch {
