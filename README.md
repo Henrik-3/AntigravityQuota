@@ -116,3 +116,6 @@ This project isn't endorsed by Google and doesn't reflect the views or opinions 
 ## License
 
 [MIT License](LICENSE)
+
+## OpenSSF Scorecard
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/jlcodes99/vscode-antigravity-cockpit/badge)](https://securityscorecards.dev/viewer/?uri=github.com/jlcodes99/vscode-antigravity-cockpit)
