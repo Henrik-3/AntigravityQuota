@@ -2,6 +2,7 @@
  * Quota Manager Service
  */
 
+import * as http from 'http';
 import * as https from 'https';
 import {
 	quota_snapshot,
@@ -19,6 +20,7 @@ export const RECONNECT_REQUIRED = 'RECONNECT_REQUIRED';
 export class QuotaManager {
 	private port: number = 0;
 	private csrf_token: string = '';
+	private use_tls: boolean = true;
 
 	private update_callback?: (snapshot: quota_snapshot) => void;
 	private error_callback?: (error: Error) => void;
@@ -28,9 +30,10 @@ export class QuotaManager {
 
 	constructor() {}
 
-	init(port: number, csrf_token: string) {
+	init(port: number, csrf_token: string, use_tls: boolean = true) {
 		this.port = port;
 		this.csrf_token = csrf_token;
+		this.use_tls = use_tls;
 		this.consecutive_errors = 0;
 	}
 
@@ -52,10 +55,15 @@ export class QuotaManager {
 				timeout: 5000,
 			};
 
-			const req = https.request(options, res => {
+			const transport = this.use_tls ? https : http;
+			const req = transport.request(options, res => {
 				let body = '';
 				res.on('data', chunk => (body += chunk));
 				res.on('end', () => {
+					if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+						reject(new Error(`HTTP ${res.statusCode}: ${body.substring(0, 200)}`));
+						return;
+					}
 					try {
 						resolve(JSON.parse(body) as T);
 					} catch {
@@ -160,6 +168,35 @@ export class QuotaManager {
 	}
 
 	/**
+	 * Resolve remainingFraction with proto3 omission fallback:
+	 * when quotaInfo is present and remainingFraction is omitted,
+	 * a valid non-epoch resetTime means exhausted (0), while an empty
+	 * or epoch resetTime means full (1).
+	 */
+	private resolve_remaining_fraction(quota_info: any, reset_time_raw?: string): number | undefined {
+		const raw = quota_info?.remainingFraction ?? quota_info?.remaining_fraction;
+		if (raw !== undefined && raw !== null) {
+			const parsed = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+			return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : undefined;
+		}
+		if (!quota_info) {
+			return undefined;
+		}
+		const rt = typeof reset_time_raw === 'string' ? reset_time_raw.trim() : '';
+		if (!rt) {
+			return 1;
+		}
+		const parsed_time = Date.parse(rt);
+		if (!Number.isFinite(parsed_time)) {
+			return undefined;
+		}
+		if (parsed_time === 0) {
+			return 1;
+		}
+		return parsed_time > 0 ? 0 : undefined;
+	}
+
+	/**
 	 * Parse quota groups from the RetrieveUserQuotaSummary API response
 	 * @param data Response from RetrieveUserQuotaSummary
 	 * @param now Current timestamp for time calculations
@@ -186,10 +223,10 @@ export class QuotaManager {
 				const bucket_id = b.bucketId ?? b.bucket_id ?? 'unknown';
 				const bucket_display_name = b.displayName ?? b.display_name ?? bucket_id;
 				const window = b.window ?? 'unknown';
-				const remaining_fraction = b.remainingFraction ?? b.remaining_fraction;
+				const reset_time_raw = b.resetTime ?? b.reset_time;
+				const remaining_fraction = this.resolve_remaining_fraction(b, reset_time_raw);
 				const remaining_percentage =
 					remaining_fraction !== undefined ? remaining_fraction * 100 : undefined;
-				const reset_time_raw = b.resetTime ?? b.reset_time;
 				const reset_time = reset_time_raw ? new Date(reset_time_raw) : new Date(0);
 				const diff = reset_time.getTime() - now.getTime();
 
@@ -224,7 +261,10 @@ export class QuotaManager {
 		quota_summary?: server_user_quota_summary_response,
 		now: Date = new Date()
 	): quota_snapshot {
-		const user_status = data.userStatus;
+		const user_status = data?.userStatus;
+		if (!user_status) {
+			throw new Error('Missing userStatus in GetUserStatus response');
+		}
 		const plan_info = user_status.planStatus?.planInfo;
 		const available_credits = user_status.planStatus?.availablePromptCredits;
 
@@ -269,7 +309,7 @@ export class QuotaManager {
 			const reset_time_raw = quota_info?.resetTime ?? quota_info?.reset_time;
 			const reset_time = reset_time_raw ? new Date(reset_time_raw) : new Date(0);
 			const diff = reset_time.getTime() - now.getTime();
-			const remaining_fraction = quota_info?.remainingFraction ?? quota_info?.remaining_fraction;
+			const remaining_fraction = this.resolve_remaining_fraction(quota_info, reset_time_raw);
 
 			return {
 				label: m.label,
