@@ -214,6 +214,7 @@ export class StatusBarManager {
 		pick.matchOnDescription = false;
 		pick.matchOnDetail = false;
 		pick.canSelectMany = false;
+		pick.keepScrollPosition = true;
 
 		pick.items = this.build_menu_items();
 
@@ -223,13 +224,25 @@ export class StatusBarManager {
 			currentActiveItem = items[0];
 		});
 
+		// Re-assigning items resets the highlight to the first row; restore it to the same entry.
+		const rebuild_items = () => {
+			const active: any = currentActiveItem;
+			pick.items = this.build_menu_items();
+			const same = pick.items.find((i: any) =>
+				active && (active.model_id ? i.model_id === active.model_id : i.group_name === active.group_name && i.label === active.label)
+			);
+			if (same) {
+				pick.activeItems = [same];
+			}
+		};
+
 		pick.onDidAccept(async () => {
 			if (currentActiveItem && 'group_name' in currentActiveItem) {
 				await this.toggle_pinned_group(
 					(currentActiveItem as any).group_name,
 					(currentActiveItem as any).group_display_name
 				);
-				pick.items = this.build_menu_items();
+				rebuild_items();
 				if (this.last_snapshot) {
 					const cfg = this.config_manager.get_config();
 					this.update(
@@ -240,7 +253,7 @@ export class StatusBarManager {
 				}
 			} else if (currentActiveItem && 'model_id' in currentActiveItem) {
 				await this.toggle_pinned_model((currentActiveItem as any).model_id);
-				pick.items = this.build_menu_items();
+				rebuild_items();
 				if (this.last_snapshot) {
 					const cfg = this.config_manager.get_config();
 					this.update(
@@ -303,6 +316,7 @@ export class StatusBarManager {
 		}
 
 		await config.update('pinnedGroups', pinned, vscode.ConfigurationTarget.Global);
+		await this.ensure_display_mode('groups');
 	}
 
 	private async toggle_pinned_model(model_id: string): Promise<void> {
@@ -317,6 +331,16 @@ export class StatusBarManager {
 		}
 
 		await config.update('pinnedModels', pinned, vscode.ConfigurationTarget.Global);
+		await this.ensure_display_mode('models');
+	}
+
+	/** Pinning something the current display mode hides would show nothing; widen the mode to 'both'. */
+	private async ensure_display_mode(needed: 'models' | 'groups'): Promise<void> {
+		const config = vscode.workspace.getConfiguration('agq');
+		const mode = config.get<display_mode>('displayMode') ?? 'models';
+		if (mode !== needed && mode !== 'both') {
+			await config.update('displayMode', 'both', vscode.ConfigurationTarget.Global);
+		}
 	}
 
 	public build_menu_items(): vscode.QuickPickItem[] {
