@@ -1,7 +1,10 @@
 import './setup';
 import {describe, it} from 'node:test';
 import * as assert from 'node:assert';
-import {WindowsStrategy, UnixStrategy} from '../core/platform_strategies';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {WindowsStrategy, UnixStrategy, resolve_csrf_token} from '../core/platform_strategies';
 
 describe('WindowsStrategy', () => {
 	it('should generate process list command with multiple process names for PowerShell', () => {
@@ -160,5 +163,47 @@ describe('UnixStrategy', () => {
 		assert.strictEqual(result?.[0].csrf_token, 'mac-token-1');
 		assert.strictEqual(result?.[1].pid, 7000);
 		assert.strictEqual(result?.[1].csrf_token, 'mac-token-2');
+	});
+});
+
+describe('resolve_csrf_token (agy hub daemon file)', () => {
+	const hub_cmd = 'agy --hub --hub-port=51445 --app_data_dir=antigravity';
+	let home: string;
+
+	const setup_home = (file: object | null) => {
+		home = fs.mkdtempSync(path.join(os.tmpdir(), 'agq-'));
+		if (file) {
+			const dir = path.join(home, '.gemini', 'antigravity', 'daemon');
+			fs.mkdirSync(dir, {recursive: true});
+			fs.writeFileSync(path.join(dir, 'hub_51445.json'), JSON.stringify(file));
+		}
+	};
+	const teardown_home = () => {
+		fs.rmSync(home, {recursive: true, force: true});
+	};
+
+	it('reads the token from hub_<port>.json when the command line has none', () => {
+		setup_home({pid: 7144, csrfToken: 'abc-123'});
+		try {
+			assert.strictEqual(resolve_csrf_token(7144, hub_cmd, home), 'abc-123');
+		} finally {
+			teardown_home();
+		}
+	});
+
+	it('prefers the command-line token and rejects a stale pid or missing file', () => {
+		setup_home({pid: 7144, csrfToken: 'abc-123'});
+		try {
+			assert.strictEqual(resolve_csrf_token(7144, `${hub_cmd} --csrf_token=cli-1`, home), 'cli-1');
+			assert.strictEqual(resolve_csrf_token(999, hub_cmd, home), null);
+		} finally {
+			teardown_home();
+		}
+		setup_home(null);
+		try {
+			assert.strictEqual(resolve_csrf_token(7144, hub_cmd, home), null);
+		} finally {
+			teardown_home();
+		}
 	});
 });
