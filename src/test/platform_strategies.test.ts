@@ -6,9 +6,13 @@ import * as os from 'os';
 import * as path from 'path';
 import {WindowsStrategy, UnixStrategy, resolve_csrf_token} from '../core/platform_strategies';
 
+// parser tests must not pick up a real ~/.gemini hub file
+const EMPTY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'agq-empty-'));
+
 describe('WindowsStrategy', () => {
 	it('should generate process list command with multiple process names for PowerShell', () => {
 		const strategy = new WindowsStrategy();
+		strategy.home_dir = EMPTY_HOME;
 		strategy.set_use_powershell(true);
 
 		const cmd = strategy.get_process_list_command(['agy.exe', 'language_server_windows_x64.exe']);
@@ -18,6 +22,7 @@ describe('WindowsStrategy', () => {
 
 	it('should generate process list command for WMIC fallback', () => {
 		const strategy = new WindowsStrategy();
+		strategy.home_dir = EMPTY_HOME;
 		strategy.set_use_powershell(false);
 
 		const cmd = strategy.get_process_list_command(['agy.exe', 'language_server_windows_x64.exe']);
@@ -27,6 +32,7 @@ describe('WindowsStrategy', () => {
 
 	it('should return null on empty stdout without throwing JSON parse error', () => {
 		const strategy = new WindowsStrategy();
+		strategy.home_dir = EMPTY_HOME;
 		const result = strategy.parse_process_info('');
 		assert.strictEqual(result, null);
 
@@ -36,6 +42,7 @@ describe('WindowsStrategy', () => {
 
 	it('should parse modern agy.exe process info with --hub-port and --app_data_dir=', () => {
 		const strategy = new WindowsStrategy();
+		strategy.home_dir = EMPTY_HOME;
 		const mockOutput = JSON.stringify({
 			ProcessId: 6200,
 			CommandLine:
@@ -52,6 +59,7 @@ describe('WindowsStrategy', () => {
 
 	it('should parse legacy language_server process info with space-separated flags', () => {
 		const strategy = new WindowsStrategy();
+		strategy.home_dir = EMPTY_HOME;
 		const mockOutput = JSON.stringify({
 			ProcessId: 1234,
 			CommandLine:
@@ -68,6 +76,7 @@ describe('WindowsStrategy', () => {
 
 	it('should filter candidate array, skip tokenless processes, and return all valid Antigravity candidates', () => {
 		const strategy = new WindowsStrategy();
+		strategy.home_dir = EMPTY_HOME;
 		const mockOutput = JSON.stringify([
 			{
 				ProcessId: 100,
@@ -113,6 +122,7 @@ describe('UnixStrategy', () => {
 
 	it('should parse modern agy process line with --hub-port and --csrf_token', () => {
 		const strategy = new UnixStrategy('darwin');
+		strategy.home_dir = EMPTY_HOME;
 		const stdout = '6200 /path/to/agy --hub --hub-port=60742 --app_data_dir=antigravity --csrf_token=mac-token-5678\n';
 
 		const result = strategy.parse_process_info(stdout);
@@ -125,6 +135,7 @@ describe('UnixStrategy', () => {
 
 	it('should parse macOS language_server binary without platform suffix (Antigravity IDE 2.6.0+)', () => {
 		const strategy = new UnixStrategy('darwin');
+		strategy.home_dir = EMPTY_HOME;
 		const stdout = '4321 /Applications/Antigravity.app/Contents/Resources/bin/language_server --extension_server_port 50001 --app_data_dir /Users/test/Library/Application Support/antigravity --csrf_token mac-token-arm-123\n';
 
 		const result = strategy.parse_process_info(stdout);
@@ -137,6 +148,7 @@ describe('UnixStrategy', () => {
 
 	it('should parse legacy language_server line with --extension_server_port', () => {
 		const strategy = new UnixStrategy('linux');
+		strategy.home_dir = EMPTY_HOME;
 		const stdout = '1234 /path/to/language_server_linux_x64 --extension_server_port=50000 --app_data_dir antigravity --csrf_token=linux-token-9999\n';
 
 		const result = strategy.parse_process_info(stdout);
@@ -149,6 +161,7 @@ describe('UnixStrategy', () => {
 
 	it('should return multiple valid candidates and skip tokenless lines', () => {
 		const strategy = new UnixStrategy('darwin');
+		strategy.home_dir = EMPTY_HOME;
 		const stdout = [
 			'100 /usr/bin/unrelated',
 			'5000 /path/to/agy --hub --hub-port=60700 --app_data_dir=antigravity',
@@ -196,6 +209,12 @@ describe('resolve_csrf_token (agy hub daemon file)', () => {
 		try {
 			assert.strictEqual(resolve_csrf_token(7144, `${hub_cmd} --csrf_token=cli-1`, home), 'cli-1');
 			assert.strictEqual(resolve_csrf_token(999, hub_cmd, home), null);
+		} finally {
+			teardown_home();
+		}
+		setup_home({csrfToken: 'no-pid'});
+		try {
+			assert.strictEqual(resolve_csrf_token(7144, hub_cmd, home), null);
 		} finally {
 			teardown_home();
 		}

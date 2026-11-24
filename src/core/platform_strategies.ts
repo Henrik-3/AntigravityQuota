@@ -17,21 +17,27 @@ export interface process_candidate {
 export function resolve_csrf_token(pid: number, command_line: string, home: string = os.homedir()): string | null {
 	const cli = command_line.match(/--csrf_token[=\s]+([a-zA-Z0-9-]+)/i);
 	if (cli?.[1]) {
+		logger.info('CsrfToken', `PID ${pid}: token taken from command line`);
 		return cli[1];
 	}
 	const hub_port = command_line.match(/--hub-port[=\s]+(\d+)/i)?.[1];
 	if (!hub_port) {
 		return null;
 	}
+	const file = path.join(home, '.gemini', 'antigravity', 'daemon', `hub_${hub_port}.json`);
 	try {
-		const file = path.join(home, '.gemini', 'antigravity', 'daemon', `hub_${hub_port}.json`);
 		const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-		// pid check guards against a stale file left by a previous hub on the same port
-		if (typeof data?.csrfToken === 'string' && /^[a-zA-Z0-9-]+$/.test(data.csrfToken) && (!data.pid || data.pid === pid)) {
+		// pid must match: guards against a stale file left by a previous hub on the same port
+		if (data?.pid !== pid) {
+			logger.warn('CsrfToken', `PID ${pid}: ${file} belongs to PID ${data?.pid}, ignoring`);
+		} else if (typeof data.csrfToken !== 'string' || !/^[a-zA-Z0-9-]+$/.test(data.csrfToken)) {
+			logger.warn('CsrfToken', `PID ${pid}: ${file} has no valid csrfToken`);
+		} else {
+			logger.info('CsrfToken', `PID ${pid}: token taken from hub file ${file}`);
 			return data.csrfToken;
 		}
-	} catch {
-		// file missing or unreadable: no token
+	} catch (e: any) {
+		logger.warn('CsrfToken', `PID ${pid}: no token on command line and cannot read ${file}: ${e.message}`);
 	}
 	return null;
 }
@@ -45,6 +51,8 @@ export interface platform_strategy {
 }
 
 export class WindowsStrategy implements platform_strategy {
+	/** Overridable so tests don't read the real home directory. */
+	home_dir: string = os.homedir();
 	private use_powershell: boolean = true;
 
 	set_use_powershell(use: boolean) {
@@ -134,7 +142,7 @@ export class WindowsStrategy implements platform_strategy {
 					}
 
 					const port_match = command_line.match(/--(?:extension_server_port|hub-port)[=\s]+(\d+)/i);
-					const csrf_token = resolve_csrf_token(pid, command_line);
+					const csrf_token = resolve_csrf_token(pid, command_line, this.home_dir);
 
 					if (!csrf_token) {
 						logger.debug('WindowsStrategy', `PID ${pid} has no valid CSRF token, skipping`);
@@ -184,7 +192,7 @@ export class WindowsStrategy implements platform_strategy {
 
 			const port_match = command_line.match(/--(?:extension_server_port|hub-port)[=\s]+(\d+)/i);
 			const pid = parseInt(pid_match[1], 10);
-			const csrf_token = resolve_csrf_token(pid, command_line);
+			const csrf_token = resolve_csrf_token(pid, command_line, this.home_dir);
 
 			if (!csrf_token) {
 				logger.debug('WindowsStrategy', `WMIC: PID ${pid_match[1]} has no CSRF token, skipping`);
@@ -267,6 +275,8 @@ export class WindowsStrategy implements platform_strategy {
 }
 
 export class UnixStrategy implements platform_strategy {
+	/** Overridable so tests don't read the real home directory. */
+	home_dir: string = os.homedir();
 	private platform: string;
 	constructor(platform: string) {
 		this.platform = platform;
@@ -331,7 +341,7 @@ export class UnixStrategy implements platform_strategy {
 			}
 
 			const port_match = cmd.match(/--(?:extension_server_port|hub-port)[=\s]+(\d+)/i);
-			const csrf_token = resolve_csrf_token(pid, cmd);
+			const csrf_token = resolve_csrf_token(pid, cmd, this.home_dir);
 
 			if (!csrf_token) {
 				logger.debug('UnixStrategy', `PID ${pid} has no CSRF token, skipping`);
