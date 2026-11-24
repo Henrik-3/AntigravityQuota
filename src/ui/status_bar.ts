@@ -147,7 +147,7 @@ export class StatusBarManager {
 		this.item.show();
 	}
 
-	update(snapshot: quota_snapshot, show_credits: boolean, mode?: display_mode) {
+	update(snapshot: quota_snapshot, _show_credits: boolean, mode?: display_mode) {
 		this.last_snapshot = snapshot;
 
 		const resolved_config = this.config_manager.get_config();
