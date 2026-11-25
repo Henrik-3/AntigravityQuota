@@ -549,3 +549,122 @@ describe('ConfigManager - legacy agQuota fallback', () => {
 		assert.strictEqual(config.polling_interval, 45000);
 	});
 });
+
+describe('QuotaManager - resolve_remaining_fraction & userStatus validation', () => {
+	it('should treat omitted remainingFraction with empty or epoch resetTime as full (1)', () => {
+		const qm = new QuotaManager();
+		const now = new Date('2026-11-25T00:00:00Z');
+		const data: any = {
+			userStatus: {
+				cascadeModelConfigData: {
+					clientModelConfigs: [
+						{
+							label: 'Model Empty Reset',
+							modelOrAlias: {model: 'model-empty'},
+							quotaInfo: {},
+						},
+						{
+							label: 'Model Epoch Reset',
+							modelOrAlias: {model: 'model-epoch'},
+							quotaInfo: {resetTime: '1970-01-01T00:00:00Z'},
+						},
+					],
+				},
+			},
+		};
+
+		const snapshot = qm.parse_response(data, undefined, now);
+		assert.strictEqual(snapshot.models.length, 2);
+		for (const model of snapshot.models) {
+			assert.strictEqual(model.remaining_fraction, 1);
+			assert.strictEqual(model.remaining_percentage, 100);
+			assert.strictEqual(model.is_exhausted, false);
+		}
+	});
+
+	it('should treat omitted remainingFraction with non-epoch resetTime as exhausted (0)', () => {
+		const qm = new QuotaManager();
+		const now = new Date('2026-11-25T00:00:00Z');
+		const data: any = {
+			userStatus: {
+				cascadeModelConfigData: {
+					clientModelConfigs: [
+						{
+							label: 'Model Exhausted',
+							modelOrAlias: {model: 'model-exhausted'},
+							quotaInfo: {resetTime: '2026-11-25T05:00:00Z'},
+						},
+					],
+				},
+			},
+		};
+		const summary: any = {
+			response: {
+				groups: [
+					{
+						displayName: 'Test Group',
+						buckets: [
+							{
+								bucketId: 'b1',
+								displayName: '5h',
+								window: '5h',
+								resetTime: '2026-11-25T05:00:00Z',
+							},
+						],
+					},
+				],
+			},
+		};
+
+		const snapshot = qm.parse_response(data, summary, now);
+		assert.strictEqual(snapshot.models[0].remaining_fraction, 0);
+		assert.strictEqual(snapshot.models[0].remaining_percentage, 0);
+		assert.strictEqual(snapshot.models[0].is_exhausted, true);
+
+		assert.ok(snapshot.groups);
+		assert.strictEqual(snapshot.groups[0].buckets[0].remaining_fraction, 0);
+		assert.strictEqual(snapshot.groups[0].buckets[0].is_exhausted, true);
+	});
+
+	it('should parse numeric string remainingFraction and leave missing quotaInfo undefined', () => {
+		const qm = new QuotaManager();
+		const now = new Date('2026-11-25T00:00:00Z');
+		const data: any = {
+			userStatus: {
+				cascadeModelConfigData: {
+					clientModelConfigs: [
+						{
+							label: 'Model String Fraction',
+							modelOrAlias: {model: 'model-str'},
+							quotaInfo: {remainingFraction: '0.42', resetTime: '2026-11-25T05:00:00Z'},
+						},
+						{
+							label: 'Model No QuotaInfo',
+							modelOrAlias: {model: 'model-none'},
+						},
+					],
+				},
+			},
+		};
+
+		const snapshot = qm.parse_response(data, undefined, now);
+		const strModel = snapshot.models.find(m => m.model_id === 'model-str');
+		const noneModel = snapshot.models.find(m => m.model_id === 'model-none');
+
+		assert.ok(strModel);
+		assert.strictEqual(strModel.remaining_fraction, 0.42);
+		assert.strictEqual(strModel.remaining_percentage, 42);
+
+		assert.ok(noneModel);
+		assert.strictEqual(noneModel.remaining_fraction, undefined);
+		assert.strictEqual(noneModel.remaining_percentage, undefined);
+	});
+
+	it('should throw when userStatus is missing from GetUserStatus response', () => {
+		const qm = new QuotaManager();
+		assert.throws(
+			() => qm.parse_response({} as any),
+			/Missing userStatus in GetUserStatus response/
+		);
+	});
+});
